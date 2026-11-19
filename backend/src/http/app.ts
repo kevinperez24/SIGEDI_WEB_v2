@@ -1,0 +1,581 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { DatabaseConnectionError } from '../database/errors.ts'
+import type { AuthResult } from '../auth/auth.types.ts'
+import {
+  DonationDocumentConflictError,
+  DonationDocumentNotFoundError,
+  DonationDocumentValidationError,
+  DonationNotFoundError,
+} from '../donativos/donativo-document.service.ts'
+import type { DownloadedDonationDocument } from '../donativos/donativo-document.service.ts'
+import type {
+  CreatedDonationDocument,
+  DonationDocumentItem,
+  DonationDocumentType,
+  DonationDocumentUpload,
+} from '../donativos/donativo-document.types.ts'
+import type {
+  CreatedDonation,
+  DonationCreateInput,
+  DonationDetail,
+  DonationListItem,
+} from '../donativos/donativo.types.ts'
+
+const MAX_BODY_BYTES = 16 * 1024
+const MAX_MULTIPART_BYTES = 11 * 1024 * 1024
+const MAX_USERNAME_LENGTH = 128
+const MAX_PASSWORD_LENGTH = 1024
+
+type Authenticate = (username: string, password: string) => Promise<AuthResult>
+type CreateDonation = (
+  createdBy: string,
+  input: DonationCreateInput,
+) => Promise<CreatedDonation>
+type ListDonations = () => Promise<DonationListItem[]>
+type CreateDonationDocument = (
+  donativoId: string,
+  createdBy: string,
+  upload: DonationDocumentUpload,
+) => Promise<CreatedDonationDocument>
+type GetDonation = (donativoId: string) => Promise<DonationDetail | null>
+type UpdateDonation = (
+  donativoId: string,
+  updatedBy: string,
+  input: DonationCreateInput,
+) => Promise<DonationDetail | null>
+type ListDonationDocuments = (donativoId: string) => Promise<DonationDocumentItem[]>
+type DownloadDonationDocument = (
+  donativoId: string,
+  documentId: string,
+) => Promise<DownloadedDonationDocument>
+type DeleteDonationDocument = (
+  donativoId: string,
+  documentId: string,
+  updatedBy: string,
+) => Promise<void>
+
+type AppDependencies = {
+  authenticate: Authenticate
+  allowedOrigin: string | readonly string[]
+  createSession: (userId: string) => string
+  resolveSession: (token: string) => string | null
+  createDonation: CreateDonation
+  listDonations: ListDonations
+  createDonationDocument: CreateDonationDocument
+  getDonation: GetDonation
+  updateDonation: UpdateDonation
+  listDonationDocuments: ListDonationDocuments
+  downloadDonationDocument: DownloadDonationDocument
+  deleteDonationDocument: DeleteDonationDocument
+}
+
+type LoginBody = {
+  usuario: string
+  password: string
+}
+
+const DONATION_FIELDS = new Set([
+  'tipo_registro',
+  'nombre_proyecto',
+  'tipo_gestion',
+  'dpto_seccion',
+  'fecha_recepcion',
+  'lugar_recepcion',
+  'observaciones',
+])
+
+class RequestBodyError extends Error {
+  constructor(readonly statusCode: number) {
+    super('Cuerpo de solicitud inválido.')
+  }
+}
+
+function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  response.end(JSON.stringify(body))
+}
+
+function sendDocument(response: ServerResponse, document: DownloadedDonationDocument): void {
+  const disposition = document.mimeType === 'application/pdf' ? 'inline' : 'attachment'
+  const encodedName = encodeURIComponent(document.name)
+  response.writeHead(200, {
+    'Content-Type': document.mimeType,
+    'Content-Length': document.contents.byteLength,
+    'Content-Disposition': `${disposition}; filename="documento"; filename*=UTF-8''${encodedName}`,
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  })
+  response.end(document.contents)
+}
+
+function applyCors(
+  request: IncomingMessage,
+  response: ServerResponse,
+  allowedOrigin: string | readonly string[],
+): boolean {
+  const origin = request.headers.origin
+  const allowedOrigins = typeof allowedOrigin === 'string' ? [allowedOrigin] : allowedOrigin
+
+  if (!origin) return true
+  if (!allowedOrigins.includes(origin)) return false
+
+  response.setHeader('Access-Control-Allow-Origin', origin)
+  response.setHeader('Vary', 'Origin')
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  return true
+}
+
+async function readBody(request: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let totalBytes = 0
+
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    totalBytes += buffer.byteLength
+
+    if (totalBytes > maxBytes) {
+      throw new RequestBodyError(413)
+    }
+
+    chunks.push(buffer)
+  }
+
+  return Buffer.concat(chunks)
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const contentType = request.headers['content-type'] ?? ''
+
+  if (!contentType.toLowerCase().startsWith('application/json')) {
+    throw new RequestBodyError(415)
+  }
+
+  const body = await readBody(request, MAX_BODY_BYTES)
+
+  try {
+    return JSON.parse(body.toString('utf8'))
+  } catch {
+    throw new RequestBodyError(400)
+  }
+}
+
+async function readDonationDocument(request: IncomingMessage): Promise<DonationDocumentUpload> {
+  const contentType = request.headers['content-type'] ?? ''
+  if (!contentType.toLowerCase().startsWith('multipart/form-data;')) {
+    throw new RequestBodyError(415)
+  }
+
+  const body = await readBody(request, MAX_MULTIPART_BYTES)
+  let formData: FormData
+
+  try {
+    const multipartRequest = new Request('http://localhost/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      body,
+    })
+    formData = await multipartRequest.formData()
+  } catch {
+    throw new RequestBodyError(400)
+  }
+
+  const tipoDocumento = formData.get('tipo_documento')
+  const file = formData.get('archivo')
+  const hasUnexpectedField = [...formData.keys()].some(
+    (field) => field !== 'tipo_documento' && field !== 'archivo',
+  )
+
+  if (
+    hasUnexpectedField ||
+    formData.getAll('tipo_documento').length !== 1 ||
+    formData.getAll('archivo').length !== 1 ||
+    (tipoDocumento !== 'MEMO_INICIAL' && tipoDocumento !== 'MEMO_DE') ||
+    !(file instanceof File)
+  ) {
+    throw new RequestBodyError(400)
+  }
+
+  return {
+    tipoDocumento: tipoDocumento as DonationDocumentType,
+    originalName: file.name,
+    mimeType: file.type,
+    contents: Buffer.from(await file.arrayBuffer()),
+  }
+}
+
+function validateLoginBody(body: unknown): LoginBody | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+
+  const candidate = body as Record<string, unknown>
+  if (typeof candidate.usuario !== 'string' || typeof candidate.password !== 'string') {
+    return null
+  }
+
+  const usuario = candidate.usuario.trim()
+  const password = candidate.password
+
+  if (
+    !usuario ||
+    !password ||
+    usuario.length > MAX_USERNAME_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return null
+  }
+
+  return { usuario, password }
+}
+
+function readRequiredString(
+  candidate: Record<string, unknown>,
+  field: keyof DonationCreateInput,
+  maxLength: number,
+): string | null {
+  const value = candidate[field]
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  return normalized && normalized.length <= maxLength ? normalized : null
+}
+
+function readOptionalString(
+  candidate: Record<string, unknown>,
+  field: 'dpto_seccion' | 'observaciones',
+  maxLength: number,
+): string | null {
+  const value = candidate[field]
+  if (value === undefined) return ''
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  return normalized.length <= maxLength ? normalized : null
+}
+
+function validateDonationBody(body: unknown): DonationCreateInput | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+
+  const candidate = body as Record<string, unknown>
+  if (Object.keys(candidate).some((field) => !DONATION_FIELDS.has(field))) return null
+
+  const tipo_registro = readRequiredString(candidate, 'tipo_registro', 200)
+  const nombre_proyecto = readRequiredString(candidate, 'nombre_proyecto', 500)
+  const tipo_gestion = readRequiredString(candidate, 'tipo_gestion', 200)
+  const fecha_recepcion = readRequiredString(candidate, 'fecha_recepcion', 10)
+  const lugar_recepcion = readRequiredString(candidate, 'lugar_recepcion', 300)
+  const dpto_seccion = readOptionalString(candidate, 'dpto_seccion', 300)
+  const observaciones = readOptionalString(candidate, 'observaciones', 2_000)
+
+  if (
+    !tipo_registro ||
+    !nombre_proyecto ||
+    !tipo_gestion ||
+    !fecha_recepcion ||
+    !lugar_recepcion ||
+    dpto_seccion === null ||
+    observaciones === null
+  ) {
+    return null
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha_recepcion)) return null
+  const parsedDate = new Date(`${fecha_recepcion}T00:00:00.000Z`)
+  if (
+    Number.isNaN(parsedDate.getTime()) ||
+    parsedDate.toISOString().slice(0, 10) !== fecha_recepcion
+  ) {
+    return null
+  }
+
+  return {
+    tipo_registro,
+    nombre_proyecto,
+    tipo_gestion,
+    dpto_seccion,
+    fecha_recepcion,
+    lugar_recepcion,
+    observaciones,
+  }
+}
+
+function readBearerToken(request: IncomingMessage): string | null {
+  const authorization = request.headers.authorization
+  if (!authorization?.startsWith('Bearer ')) return null
+  const token = authorization.slice('Bearer '.length).trim()
+  return token || null
+}
+
+export function createRequestHandler({
+  authenticate,
+  allowedOrigin,
+  createSession,
+  resolveSession,
+  createDonation,
+  listDonations,
+  createDonationDocument,
+  getDonation,
+  updateDonation,
+  listDonationDocuments,
+  downloadDonationDocument,
+  deleteDonationDocument,
+}: AppDependencies) {
+  return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    if (!applyCors(request, response, allowedOrigin)) {
+      sendJson(response, 403, { ok: false, message: 'Origen no permitido.' })
+      return
+    }
+
+    const url = new URL(request.url ?? '/', 'http://localhost')
+
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204)
+      response.end()
+      return
+    }
+
+    const isLoginRoute = url.pathname === '/api/auth/login'
+    const isDonationRoute = url.pathname === '/api/donativos'
+    const donationDocumentMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)\/documentos$/)
+    const isDonationDocumentRoute = donationDocumentMatch !== null
+    const donationDocumentItemMatch = url.pathname.match(
+      /^\/api\/donativos\/([^/]+)\/documentos\/([^/]+)$/,
+    )
+    const isDonationDocumentItemRoute = donationDocumentItemMatch !== null
+    const donationDetailMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)$/)
+    const isDonationDetailRoute = donationDetailMatch !== null
+
+    if (
+      !isLoginRoute &&
+      !isDonationRoute &&
+      !isDonationDocumentRoute &&
+      !isDonationDocumentItemRoute &&
+      !isDonationDetailRoute
+    ) {
+      sendJson(response, 404, { ok: false, message: 'Recurso no encontrado.' })
+      return
+    }
+
+    const methodIsAllowed = isDonationRoute
+      ? request.method === 'GET' || request.method === 'POST'
+      : isDonationDetailRoute
+        ? request.method === 'GET' || request.method === 'PATCH'
+        : isDonationDocumentItemRoute
+          ? request.method === 'GET' || request.method === 'DELETE'
+          : request.method === 'POST'
+
+    if (!methodIsAllowed) {
+      response.setHeader(
+        'Allow',
+        isDonationRoute
+          ? 'GET, POST, OPTIONS'
+          : isDonationDetailRoute
+            ? 'GET, PATCH, OPTIONS'
+            : isDonationDocumentItemRoute
+              ? 'GET, DELETE, OPTIONS'
+              : 'POST, OPTIONS',
+      )
+      sendJson(response, 405, { ok: false, message: 'Método no permitido.' })
+      return
+    }
+
+    try {
+      if (isDonationDocumentItemRoute) {
+        const token = readBearerToken(request)
+        const currentUser = token ? resolveSession(token) : null
+
+        if (!currentUser) {
+          sendJson(response, 401, { ok: false, message: 'Debe iniciar sesión nuevamente.' })
+          return
+        }
+
+        const donativoId = decodeURIComponent(donationDocumentItemMatch[1] ?? '')
+        const documentId = decodeURIComponent(donationDocumentItemMatch[2] ?? '')
+
+        if (request.method === 'GET') {
+          sendDocument(response, await downloadDonationDocument(donativoId, documentId))
+          return
+        }
+
+        await deleteDonationDocument(donativoId, documentId, currentUser)
+        sendJson(response, 200, { ok: true })
+        return
+      }
+
+      if (isDonationDetailRoute) {
+        const token = readBearerToken(request)
+        const currentUser = token ? resolveSession(token) : null
+
+        if (!currentUser) {
+          sendJson(response, 401, { ok: false, message: 'Debe iniciar sesión nuevamente.' })
+          return
+        }
+
+        const donativoId = decodeURIComponent(donationDetailMatch[1] ?? '')
+
+        if (request.method === 'GET') {
+          const donativo = await getDonation(donativoId)
+          if (!donativo) {
+            sendJson(response, 404, { ok: false, message: 'El donativo no existe.' })
+            return
+          }
+          const documentos = await listDonationDocuments(donativoId)
+          sendJson(response, 200, { ok: true, donativo, documentos })
+          return
+        }
+
+        const donationBody = validateDonationBody(await readJsonBody(request))
+        if (!donationBody) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Los datos del donativo son inválidos.',
+          })
+          return
+        }
+
+        const donativo = await updateDonation(donativoId, currentUser, donationBody)
+        if (!donativo) {
+          sendJson(response, 404, { ok: false, message: 'El donativo no existe.' })
+          return
+        }
+        sendJson(response, 200, { ok: true, donativo })
+        return
+      }
+
+      if (isDonationDocumentRoute) {
+        const token = readBearerToken(request)
+        const createdBy = token ? resolveSession(token) : null
+
+        if (!createdBy) {
+          sendJson(response, 401, {
+            ok: false,
+            message: 'Debe iniciar sesión nuevamente.',
+          })
+          return
+        }
+
+        const donativoId = decodeURIComponent(donationDocumentMatch[1] ?? '')
+        const upload = await readDonationDocument(request)
+        const documento = await createDonationDocument(donativoId, createdBy, upload)
+        sendJson(response, 201, { ok: true, documento })
+        return
+      }
+
+      if (isDonationRoute) {
+        const token = readBearerToken(request)
+        const createdBy = token ? resolveSession(token) : null
+
+        if (!createdBy) {
+          sendJson(response, 401, {
+            ok: false,
+            message: 'Debe iniciar sesión nuevamente.',
+          })
+          return
+        }
+
+        if (request.method === 'GET') {
+          const donativos = await listDonations()
+          sendJson(response, 200, { ok: true, donativos })
+          return
+        }
+
+        const rawBody = await readJsonBody(request)
+
+        const donationBody = validateDonationBody(rawBody)
+
+        if (!donationBody) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Los datos del donativo son inválidos.',
+          })
+          return
+        }
+
+        const donativo = await createDonation(createdBy, donationBody)
+        sendJson(response, 201, { ok: true, donativo })
+        return
+      }
+
+      const rawBody = await readJsonBody(request)
+
+      const body = validateLoginBody(rawBody)
+
+      if (!body) {
+        sendJson(response, 400, { ok: false, message: 'Datos de acceso inválidos.' })
+        return
+      }
+
+      const result = await authenticate(body.usuario, body.password)
+
+      if (!result.ok) {
+        sendJson(response, 401, {
+          ok: false,
+          message: 'Usuario o contraseña incorrectos.',
+        })
+        return
+      }
+
+      const authToken = createSession(result.user.id)
+      sendJson(response, 200, { ok: true, usuario: result.user, authToken })
+    } catch (error) {
+      if (error instanceof RequestBodyError) {
+        sendJson(response, error.statusCode, {
+          ok: false,
+          message: isDonationDocumentRoute
+            ? 'El documento enviado no es válido.'
+            : isDonationRoute || isDonationDetailRoute
+            ? 'Los datos del donativo son inválidos.'
+            : 'Datos de acceso inválidos.',
+        })
+        return
+      }
+
+      if (error instanceof DonationDocumentValidationError) {
+        sendJson(response, 400, { ok: false, message: 'El documento enviado no es válido.' })
+        return
+      }
+
+      if (error instanceof DonationNotFoundError) {
+        sendJson(response, 404, { ok: false, message: 'El donativo no existe.' })
+        return
+      }
+
+      if (error instanceof DonationDocumentNotFoundError) {
+        sendJson(response, 404, { ok: false, message: 'El documento no existe.' })
+        return
+      }
+
+      if (error instanceof DonationDocumentConflictError) {
+        sendJson(response, 409, {
+          ok: false,
+          message: 'Ya existe un documento de este tipo para el donativo.',
+        })
+        return
+      }
+
+      const category =
+        error instanceof DatabaseConnectionError
+          ? 'database_connection_failed'
+          : 'database_query_failed'
+      const area =
+        isDonationDocumentRoute || isDonationDocumentItemRoute
+          ? 'donativo_documentos'
+          : isDonationRoute || isDonationDetailRoute
+            ? 'donativos'
+            : 'auth'
+      console.error(`[${area}] ${category}`)
+
+      sendJson(response, 503, {
+        ok: false,
+        message: isDonationDocumentRoute || isDonationDocumentItemRoute
+          ? 'No fue posible guardar el documento en este momento.'
+          : isDonationRoute || isDonationDetailRoute
+          ? request.method === 'GET'
+            ? 'No fue posible cargar las donaciones.'
+            : 'No fue posible guardar los cambios en este momento.'
+          : 'No fue posible iniciar sesión en este momento.',
+      })
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "sigedi-v2-backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "inspect:login-state": "node dist/scripts/inspect-login-state.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/auth.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "surrealdb": "^2.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.0"
+  }
+}
