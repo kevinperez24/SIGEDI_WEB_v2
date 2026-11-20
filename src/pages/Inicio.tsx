@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AuthenticatedUser } from '../services/auth'
-import { getDonations } from '../services/donations'
+import { deleteDonation, getDonations } from '../services/donations'
 import type { DonationListItem } from '../services/donations'
 import DonationDraftModal from '../components/DonationDraftModal'
 import DonationDetailModal from '../components/DonationDetailModal'
+import conapinaLogo from '../assets/Logo-CONAPINA-siglas-negativo.png'
 import './Inicio.css'
 
 type InicioProps = {
@@ -12,21 +13,28 @@ type InicioProps = {
   onLogout: () => void
 }
 
-const informationCards = [
-  { label: 'Total de donaciones', value: '0' },
-  { label: 'Registros recientes', value: '0' },
-  { label: 'Estado del sistema', value: 'Disponible' },
-]
-
-const donationSummaryCards = [
-  { label: 'Total de donaciones', value: '0' },
-  { label: 'Donaciones en proceso', value: '0' },
-  { label: 'Donaciones finalizadas', value: '0' },
-]
-
 type ActiveView = 'inicio' | 'donaciones'
 
+type WorkspaceHeroProps = {
+  eyebrow: string
+  title: string
+  description: string
+  titleId: string
+}
+
 const DONATIONS_PER_PAGE = 10
+
+function WorkspaceHero({ eyebrow, title, description, titleId }: WorkspaceHeroProps) {
+  return (
+    <section className="workspace-hero" aria-labelledby={titleId}>
+      <div className="workspace-hero-content">
+        <p className="workspace-eyebrow">{eyebrow}</p>
+        <h1 id={titleId}>{title}</h1>
+        <p>{description}</p>
+      </div>
+    </section>
+  )
+}
 
 function formatReceptionDate(value: string): string {
   const date = new Date(value)
@@ -57,10 +65,22 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
   const [isDonationModalOpen, setIsDonationModalOpen] = useState(false)
   const [selectedDonationId, setSelectedDonationId] = useState<string | null>(null)
   const [donations, setDonations] = useState<DonationListItem[]>([])
-  const [isDonationsLoading, setIsDonationsLoading] = useState(false)
+  const [isDonationsLoading, setIsDonationsLoading] = useState(true)
   const [donationsError, setDonationsError] = useState(false)
   const [donationsPage, setDonationsPage] = useState(1)
+  const [donationToDelete, setDonationToDelete] = useState<DonationListItem | null>(null)
+  const [isDeletingDonation, setIsDeletingDonation] = useState(false)
+  const [deletionMessage, setDeletionMessage] = useState('')
+  const [deletionError, setDeletionError] = useState('')
   const fullName = `${user.nombres} ${user.apellidos}`.trim() || user.usuario
+  const userRole = user.roles.length > 0 ? user.roles.join(' · ') : 'Sin rol asignado'
+  const userInitials =
+    [user.nombres, user.apellidos]
+      .map((name) => name.trim().charAt(0))
+      .filter(Boolean)
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || user.usuario.slice(0, 2).toUpperCase()
 
   const loadDonations = useCallback(async () => {
     setIsDonationsLoading(true)
@@ -80,8 +100,54 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
   }, [authToken])
 
   useEffect(() => {
-    if (activeView === 'donaciones') void loadDonations()
+    void loadDonations()
   }, [activeView, loadDonations])
+
+  const handleDeleteDonation = async () => {
+    if (!donationToDelete || isDeletingDonation) return
+    setIsDeletingDonation(true)
+    setDeletionError('')
+    try {
+      const message = await deleteDonation(donationToDelete.id, authToken)
+      setDonationToDelete(null)
+      setDeletionMessage(message)
+      await loadDonations()
+    } catch (error) {
+      setDeletionError(
+        error instanceof Error ? error.message : 'No fue posible eliminar la donación.',
+      )
+    } finally {
+      setIsDeletingDonation(false)
+    }
+  }
+
+  const donationKpiValue = isDonationsLoading
+    ? 'Cargando…'
+    : donationsError
+      ? 'No disponible'
+      : donations.length.toLocaleString('es-SV')
+  const donationKpiClass = isDonationsLoading
+    ? 'information-value--pending'
+    : donationsError
+      ? 'information-value--error'
+      : undefined
+  const donationSummaryCards = [
+    { label: 'Total de donaciones', value: donationKpiValue, valueClass: undefined },
+    {
+      label: 'Donaciones en proceso',
+      value: donations
+        .filter((donation) => donation.estado === 'EN_PROCESO')
+        .length.toLocaleString('es-SV'),
+      valueClass: undefined,
+    },
+    {
+      label: 'Donaciones finalizadas',
+      value: donations
+        .filter((donation) => donation.estado === 'FINALIZADO')
+        .length.toLocaleString('es-SV'),
+      valueClass: 'information-value--success',
+    },
+  ]
 
   const totalDonationPages = Math.max(
     1,
@@ -96,8 +162,8 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
     <div className="dashboard-shell">
       <header className="dashboard-header">
         <div className="dashboard-brand">
-          <div className="dashboard-logo" aria-hidden="true">
-            S
+          <div className="dashboard-logo">
+            <img src={conapinaLogo} alt="CONAPINA" />
           </div>
           <div>
             <p className="dashboard-title">SIGEDI</p>
@@ -108,9 +174,9 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
         </div>
 
         <div className="dashboard-user">
-          <div className="dashboard-user-copy">
-            <span>Sesión iniciada como</span>
+          <div className="header-user-identity">
             <strong>{fullName}</strong>
+            <span>{userRole}</span>
           </div>
           <button type="button" className="logout-button" onClick={onLogout}>
             Cerrar sesión
@@ -120,6 +186,18 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
 
       <div className="dashboard-layout">
         <aside className="dashboard-sidebar" aria-label="Navegación principal">
+          <div className="sidebar-profile">
+            <div className="sidebar-avatar" aria-hidden="true">
+              {userInitials}
+            </div>
+            <div className="sidebar-profile-copy">
+              <strong>{fullName}</strong>
+              <span>{userRole}</span>
+            </div>
+          </div>
+
+          <div className="sidebar-divider" />
+          <p className="sidebar-section-label">Módulos</p>
           <nav>
             <button
               className={`nav-item${activeView === 'inicio' ? ' nav-item--active' : ''}`}
@@ -127,10 +205,13 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
               onClick={() => setActiveView('inicio')}
               aria-pressed={activeView === 'inicio'}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m12 3 9 8h-3v9h-5v-6h-2v6H6v-9H3l9-8Z" />
-              </svg>
-              Inicio
+              <span className="nav-icon nav-icon--home" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="m4 10 8-7 8 7v10H5a1 1 0 0 1-1-1v-9Z" />
+                  <path d="M9 20v-6h6v6" />
+                </svg>
+              </span>
+              <span>Inicio</span>
             </button>
             <button
               className={`nav-item${activeView === 'donaciones' ? ' nav-item--active' : ''}`}
@@ -138,21 +219,25 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
               onClick={() => setActiveView('donaciones')}
               aria-pressed={activeView === 'donaciones'}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 5h16v14H4V5Zm2 2v2h12V7H6Zm0 4v6h12v-6H6Zm2 1h4v4H8v-4Z" />
-              </svg>
-              Donaciones
+              <span className="nav-icon nav-icon--donations" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M4 8h16v12H4z" />
+                  <path d="M3 8h18M12 8v12M5 4h5a2 2 0 0 1 2 2v2H7a2 2 0 0 1-2-2V4Zm14 0h-5a2 2 0 0 0-2 2v2h5a2 2 0 0 0 2-2V4Z" />
+                </svg>
+              </span>
+              <span>Donativos</span>
             </button>
           </nav>
         </aside>
 
         {activeView === 'inicio' ? (
           <main className="dashboard-main" id="inicio">
-            <div className="welcome-copy">
-              <p className="section-eyebrow">Panel principal</p>
-              <h1>Bienvenido al Sistema de Gestión de Donaciones Institucionales</h1>
-              <p>Consulte el estado general y acceda a los módulos institucionales.</p>
-            </div>
+            <WorkspaceHero
+              eyebrow="MI ESPACIO DE TRABAJO"
+              title="Bienvenido a SIGEDI · Sistema de Gestión de Donaciones Institucionales"
+              description="Consulte y gestione la información de donaciones institucionales."
+              titleId="workspace-title"
+            />
 
             <section className="module-card" aria-labelledby="module-title">
               <div className="module-icon" aria-hidden="true">
@@ -169,25 +254,25 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
             <section className="information-section" aria-labelledby="summary-title">
               <div className="information-heading">
                 <h2 id="summary-title">Resumen general</h2>
-                <span>Datos de ejemplo</span>
               </div>
-              <div className="information-grid">
-                {informationCards.map((card) => (
-                  <article className="information-card" key={card.label}>
-                    <p>{card.label}</p>
-                    <strong>{card.value}</strong>
-                  </article>
-                ))}
+              <div className="information-grid information-grid--single">
+                <article className="information-card" aria-live="polite">
+                  <p>Total de donaciones</p>
+                  <strong className={donationKpiClass}>
+                    {donationKpiValue}
+                  </strong>
+                </article>
               </div>
             </section>
           </main>
         ) : (
           <main className="dashboard-main" id="donaciones">
-            <div className="welcome-copy">
-              <p className="section-eyebrow">Módulo de Donaciones</p>
-              <h1>Gestión de Donaciones Institucionales</h1>
-              <p>Registre, consulte y administre las donaciones institucionales.</p>
-            </div>
+            <WorkspaceHero
+              eyebrow="MÓDULO DE DONATIVOS"
+              title="Gestión de Donaciones Institucionales"
+              description="Registre, consulte y administre las donaciones institucionales."
+              titleId="donations-title"
+            />
 
             <section
               className="module-card module-card--action"
@@ -216,13 +301,16 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
             <section className="information-section" aria-labelledby="donation-summary-title">
               <div className="information-heading">
                 <h2 id="donation-summary-title">Resumen de donaciones</h2>
-                <span>Datos de ejemplo</span>
               </div>
               <div className="information-grid">
                 {donationSummaryCards.map((card) => (
                   <article className="information-card" key={card.label}>
                     <p>{card.label}</p>
-                    <strong>{card.value}</strong>
+                    <strong
+                      className={donationKpiClass ?? card.valueClass}
+                    >
+                      {isDonationsLoading || donationsError ? donationKpiValue : card.value}
+                    </strong>
                   </article>
                 ))}
               </div>
@@ -264,7 +352,9 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
                         {visibleDonations.map((donation) => {
                           const secondaryProjectInfo = [
                             donation.dpto_seccion,
-                            donation.lugar_recepcion,
+                            donation.lugar_recepcion
+                              .map((place) => place.nombre)
+                              .join(' · '),
                           ]
                             .filter(Boolean)
                             .join(' · ')
@@ -304,6 +394,7 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
                                 </span>
                               </td>
                               <td>
+                                <div className="donation-row-actions">
                                 <button
                                   className="view-donation-button"
                                   type="button"
@@ -311,6 +402,18 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
                                 >
                                   Ver
                                 </button>
+                                <button
+                                  className="delete-donation-button"
+                                  type="button"
+                                  onClick={() => {
+                                    setDeletionMessage('')
+                                    setDeletionError('')
+                                    setDonationToDelete(donation)
+                                  }}
+                                >
+                                  Eliminar
+                                </button>
+                                </div>
                               </td>
                             </tr>
                           )
@@ -350,7 +453,7 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
           creatorName={fullName}
           authToken={authToken}
           onClose={() => setIsDonationModalOpen(false)}
-          onSaved={() => void loadDonations()}
+          onSaved={loadDonations}
         />
       )}
 
@@ -361,6 +464,52 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
           onClose={() => setSelectedDonationId(null)}
           onUpdated={() => void loadDonations()}
         />
+      )}
+
+      {deletionMessage && (
+        <div className="donation-deletion-notice" role="status">
+          <span>{deletionMessage}</span>
+          <button type="button" onClick={() => setDeletionMessage('')} aria-label="Cerrar mensaje">
+            ×
+          </button>
+        </div>
+      )}
+
+      {donationToDelete && (
+        <div className="donation-confirmation-overlay" role="presentation">
+          <section
+            className="donation-confirmation-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-donation-title"
+            aria-describedby="delete-donation-description"
+          >
+            <h2 id="delete-donation-title">Eliminar donación</h2>
+            <p id="delete-donation-description">
+              ¿Está seguro de eliminar esta donación? Esta acción eliminará también los
+              documentos relacionados y no podrá deshacerse.
+            </p>
+            {deletionError && <p className="donation-confirmation-error" role="alert">{deletionError}</p>}
+            <div className="donation-confirmation-actions">
+              <button
+                type="button"
+                className="donation-confirmation-cancel"
+                disabled={isDeletingDonation}
+                onClick={() => setDonationToDelete(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="donation-confirmation-delete"
+                disabled={isDeletingDonation}
+                onClick={() => void handleDeleteDonation()}
+              >
+                {isDeletingDonation ? 'Eliminando...' : 'Eliminar donación'}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   )

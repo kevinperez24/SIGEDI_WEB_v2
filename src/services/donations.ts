@@ -1,13 +1,26 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL?.trim() || 'http://localhost:3001'
 
+export type ReceptionPlace = {
+  id: string
+  codigo: string
+  nombre: string
+}
+
+export type UpcRepresentative = {
+  id: string
+  codigo: string
+  nombre: string
+}
+
 export type DonationDraftInput = {
   tipo_registro: string
   nombre_proyecto: string
   tipo_gestion: string
   dpto_seccion: string
   fecha_recepcion: string
-  lugar_recepcion: string
+  lugar_recepcion: string[]
   observaciones: string
+  representante_upc: string
 }
 
 export type CreatedDonation = {
@@ -16,7 +29,11 @@ export type CreatedDonation = {
   correlativo_acta: null
 }
 
-export type DonationDocumentType = 'MEMO_INICIAL' | 'MEMO_DE'
+export type DonationDocumentType =
+  | 'MEMO_INICIAL'
+  | 'MEMO_DE'
+  | 'ACTA_CONAPINA'
+  | 'ACUERDO_DONACION'
 
 export type CreatedDonationDocument = {
   id: string
@@ -44,8 +61,9 @@ export type DonationDetail = {
   tipo_gestion: string
   dpto_seccion: string | null
   fecha_recepcion: string
-  lugar_recepcion: string
+  lugar_recepcion: ReceptionPlace[]
   observaciones: string | null
+  representante_upc: UpcRepresentative | null
   created_by: string
   created_by_name: string | null
   created_at: string
@@ -65,7 +83,7 @@ export type DonationListItem = {
   tipo_gestion: string
   dpto_seccion: string | null
   fecha_recepcion: string
-  lugar_recepcion: string
+  lugar_recepcion: ReceptionPlace[]
   estado: 'BORRADOR' | 'EN_PROCESO' | 'FINALIZADO' | 'ANULADO'
   created_at: string
 }
@@ -90,10 +108,57 @@ type DonationUpdateResponse =
   | { ok: true; donativo: DonationDetail }
   | { ok: false; message: string }
 
+type DonationDeletionResponse =
+  | { ok: true; message: string }
+  | { ok: false; message: string }
+
+type ReceptionPlaceCatalogResponse =
+  | { ok: true; lugares: ReceptionPlace[] }
+  | { ok: false; message: string }
+
+type UpcRepresentativeCatalogResponse =
+  | { ok: true; representantes: UpcRepresentative[] }
+  | { ok: false; message: string }
+
 export class DonationSaveError extends Error {}
 export class DonationListError extends Error {}
 export class DonationDocumentSaveError extends Error {}
 export class DonationDetailError extends Error {}
+export class DonationDeletionError extends Error {}
+export class ReceptionPlaceCatalogError extends Error {}
+export class UpcRepresentativeCatalogError extends Error {}
+
+export async function getReceptionPlaces(authToken: string): Promise<ReceptionPlace[]> {
+  const response = await fetch(`${API_BASE_URL}/api/catalogos/lugares-recepcion`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  }).catch(() => null)
+
+  if (!response) throw new ReceptionPlaceCatalogError('No fue posible cargar los lugares.')
+  const result = (await response.json().catch(() => null)) as ReceptionPlaceCatalogResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new ReceptionPlaceCatalogError('No fue posible cargar los lugares.')
+  }
+  return result.lugares
+}
+
+export async function getUpcRepresentatives(
+  authToken: string,
+): Promise<UpcRepresentative[]> {
+  const response = await fetch(`${API_BASE_URL}/api/catalogos/representantes-upc`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  }).catch(() => null)
+
+  if (!response) {
+    throw new UpcRepresentativeCatalogError('No fue posible cargar los representantes.')
+  }
+  const result = (await response.json().catch(
+    () => null,
+  )) as UpcRepresentativeCatalogResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new UpcRepresentativeCatalogError('No fue posible cargar los representantes.')
+  }
+  return result.representantes
+}
 
 export async function createDonation(
   input: DonationDraftInput,
@@ -155,6 +220,28 @@ export async function getDonations(authToken: string): Promise<DonationListItem[
   }
 
   return result.donativos
+}
+
+export async function deleteDonation(
+  donationId: string,
+  authToken: string,
+): Promise<string> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    },
+  ).catch(() => null)
+
+  if (!response) throw new DonationDeletionError('No fue posible eliminar la donación.')
+  const result = (await response.json().catch(() => null)) as DonationDeletionResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new DonationDeletionError(
+      result && !result.ok ? result.message : 'No fue posible eliminar la donación.',
+    )
+  }
+  return result.message
 }
 
 export async function uploadDonationDocument(

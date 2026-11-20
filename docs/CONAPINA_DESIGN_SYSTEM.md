@@ -59,3 +59,16 @@ Debe mantenerse un interlineado legible, contraste suficiente y una jerarquía t
 ## Alcance de UI-01
 
 La implementación inicial aplica estos criterios únicamente al Login. Los tokens quedan disponibles para reutilización controlada, pero su adopción en otras vistas debe realizarse en fases posteriores sin modificar sus contratos funcionales.
+
+## Shell y workspace (UI-03)
+
+- El shell autenticado utiliza un encabezado horizontal persistente de 58 px con `--conapina-shell-dark`, marca e identidad real de la sesión. Sus bordes exteriores permanecen rectos.
+- Los módulos reutilizan un único Hero compacto con el gradiente institucional, radio de 16–20 px y decoración circular discreta. Solo cambian la etiqueta, el título y la descripción de cada módulo.
+- Los KPI procedentes de servicios deben distinguir carga, error y cero válido. Nunca se presenta `0` como sustituto de una consulta fallida.
+
+## Controles de formulario (UI-04)
+
+- `FormSelect` implementa el patrón accesible combobox/listbox para opciones reutilizables, conservando el valor string del contrato y la opción vacía de selección.
+- `FormMultiSelect` extiende el patrón listbox para catálogos de selección múltiple y representa los valores elegidos como chips removibles; debe recibir sus opciones desde servicios, no desde catálogos hardcodeados.
+- `DatePicker` presenta un calendario institucional accesible y conserva externamente fechas con formato `YYYY-MM-DD`. Soporta navegación por flechas, Home/End, PageUp/PageDown, selección con Enter/Espacio y cierre con Escape.
+- Ambos controles usan los tokens de borde, foco, navy, azul y superficies suaves; mantienen foco visible, estados deshabilitados y reducción de movimiento.

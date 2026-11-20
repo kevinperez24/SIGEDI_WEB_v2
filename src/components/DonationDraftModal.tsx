@@ -1,17 +1,33 @@
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import {
   createDonation,
   DonationSaveError,
+  getReceptionPlaces,
+  getUpcRepresentatives,
   uploadDonationDocument,
 } from '../services/donations'
-import type { DonationDocumentType } from '../services/donations'
+import type {
+  DonationDocumentType,
+  ReceptionPlace,
+  UpcRepresentative,
+} from '../services/donations'
+import DatePicker from './form/DatePicker'
+import FormMultiSelect from './form/FormMultiSelect'
+import FormSelect from './form/FormSelect'
 import './DonationDraftModal.css'
 
 type DonationDraftModalProps = {
   creatorName: string
   authToken: string
   onClose: () => void
-  onSaved: () => void
+  onSaved: () => void | Promise<void>
 }
 
 type DonationForm = {
@@ -20,8 +36,9 @@ type DonationForm = {
   tipoGestion: string
   departamentoSeccion: string
   fechaRecepcion: string
-  lugarRecepcion: string
+  lugarRecepcion: string[]
   observaciones: string
+  representanteUpc: string
 }
 
 type RequiredField =
@@ -32,8 +49,13 @@ type RequiredField =
   | 'lugarRecepcion'
 
 type FormErrors = Partial<Record<RequiredField, string>>
+type StringFormField = Exclude<keyof DonationForm, 'lugarRecepcion'>
 
-type AttachmentField = 'initialRecord' | 'executiveAuthorization'
+type AttachmentField =
+  | 'initialRecord'
+  | 'executiveAuthorization'
+  | 'conapinaRecord'
+  | 'donationAgreement'
 type Attachments = Record<AttachmentField, File | null>
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -42,11 +64,15 @@ const allowedAttachmentExtensions = new Set(['.pdf', '.doc', '.docx'])
 const attachmentDocumentTypes: Record<AttachmentField, DonationDocumentType> = {
   initialRecord: 'MEMO_INICIAL',
   executiveAuthorization: 'MEMO_DE',
+  conapinaRecord: 'ACTA_CONAPINA',
+  donationAgreement: 'ACUERDO_DONACION',
 }
 
 const initialAttachments: Attachments = {
   initialRecord: null,
   executiveAuthorization: null,
+  conapinaRecord: null,
+  donationAgreement: null,
 }
 
 function formatFileSize(sizeBytes: number): string {
@@ -60,20 +86,15 @@ const managementTypeOptions = [
   'Asistencia Humanitaria',
 ]
 
-const receptionPlaceOptions = [
-  'Sede central CONAPINA',
-  'Dependencia institucional',
-  'Otro lugar de recepción',
-]
-
 const initialForm: DonationForm = {
   tipoRegistro: '',
   nombreDonativo: '',
   tipoGestion: '',
   departamentoSeccion: '',
   fechaRecepcion: '',
-  lugarRecepcion: '',
+  lugarRecepcion: [],
   observaciones: '',
+  representanteUpc: '',
 }
 
 function DonationDraftModal({
@@ -84,16 +105,56 @@ function DonationDraftModal({
 }: DonationDraftModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const firstFieldRef = useRef<HTMLInputElement>(null)
+  const operationLockedRef = useRef(false)
   const [form, setForm] = useState(initialForm)
   const [errors, setErrors] = useState<FormErrors>({})
   const [statusMessage, setStatusMessage] = useState('')
   const [statusType, setStatusType] = useState<'success' | 'error' | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [isClosing, setIsClosing] = useState(false)
   const [createdDonationId, setCreatedDonationId] = useState<string | null>(null)
   const [attachments, setAttachments] = useState<Attachments>(initialAttachments)
   const [attachmentErrors, setAttachmentErrors] = useState<
     Partial<Record<AttachmentField, string>>
   >({})
+  const [receptionPlaces, setReceptionPlaces] = useState<ReceptionPlace[]>([])
+  const [isReceptionPlacesLoading, setIsReceptionPlacesLoading] = useState(true)
+  const [receptionPlacesError, setReceptionPlacesError] = useState('')
+  const [upcRepresentatives, setUpcRepresentatives] = useState<UpcRepresentative[]>([])
+  const [isUpcRepresentativesLoading, setIsUpcRepresentativesLoading] = useState(true)
+  const [upcRepresentativesError, setUpcRepresentativesError] = useState('')
+
+  const loadReceptionPlaces = useCallback(async () => {
+    setIsReceptionPlacesLoading(true)
+    setReceptionPlacesError('')
+    try {
+      setReceptionPlaces(await getReceptionPlaces(authToken))
+    } catch {
+      setReceptionPlacesError('No fue posible cargar los lugares de recepción.')
+    } finally {
+      setIsReceptionPlacesLoading(false)
+    }
+  }, [authToken])
+
+  useEffect(() => {
+    void loadReceptionPlaces()
+  }, [loadReceptionPlaces])
+
+  const loadUpcRepresentatives = useCallback(async () => {
+    setIsUpcRepresentativesLoading(true)
+    setUpcRepresentativesError('')
+    try {
+      setUpcRepresentatives(await getUpcRepresentatives(authToken))
+    } catch {
+      setUpcRepresentativesError('No fue posible cargar los representantes UPC.')
+    } finally {
+      setIsUpcRepresentativesLoading(false)
+    }
+  }, [authToken])
+
+  useEffect(() => {
+    void loadUpcRepresentatives()
+  }, [loadUpcRepresentatives])
 
   useEffect(() => {
     const previousActiveElement = document.activeElement as HTMLElement | null
@@ -102,7 +163,7 @@ function DonationDraftModal({
     firstFieldRef.current?.focus()
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !operationLockedRef.current) {
         event.preventDefault()
         onClose()
       }
@@ -138,7 +199,7 @@ function DonationDraftModal({
     }
   }
 
-  const updateField = (field: keyof DonationForm, value: string) => {
+  const updateField = (field: StringFormField, value: string) => {
     setForm((current) => ({ ...current, [field]: value }))
     setStatusMessage('')
     setStatusType(null)
@@ -147,17 +208,25 @@ function DonationDraftModal({
       (field === 'tipoRegistro' ||
         field === 'nombreDonativo' ||
         field === 'tipoGestion' ||
-        field === 'fechaRecepcion' ||
-        field === 'lugarRecepcion') &&
+        field === 'fechaRecepcion') &&
       value.trim()
     ) {
       setErrors((current) => ({ ...current, [field]: undefined }))
     }
   }
 
+  const updateReceptionPlaces = (values: string[]) => {
+    setForm((current) => ({ ...current, lugarRecepcion: values }))
+    setStatusMessage('')
+    setStatusType(null)
+    if (values.length > 0) {
+      setErrors((current) => ({ ...current, lugarRecepcion: undefined }))
+    }
+  }
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (isSaving) return
+    if (operationLockedRef.current) return
 
     const nextErrors: FormErrors = {}
 
@@ -177,8 +246,8 @@ function DonationDraftModal({
       nextErrors.fechaRecepcion = 'Debe ingresar la fecha de recepción.'
     }
 
-    if (!form.lugarRecepcion.trim()) {
-      nextErrors.lugarRecepcion = 'Debe seleccionar el lugar de recepción.'
+    if (form.lugarRecepcion.length === 0) {
+      nextErrors.lugarRecepcion = 'Debe seleccionar al menos un lugar de recepción.'
     }
 
     setErrors(nextErrors)
@@ -195,6 +264,7 @@ function DonationDraftModal({
       return
     }
 
+    operationLockedRef.current = true
     setIsSaving(true)
     setStatusMessage('')
     setStatusType(null)
@@ -212,12 +282,12 @@ function DonationDraftModal({
             fecha_recepcion: form.fechaRecepcion,
             lugar_recepcion: form.lugarRecepcion,
             observaciones: form.observaciones.trim(),
+            representante_upc: form.representanteUpc.trim(),
           },
           authToken,
         )
         donationId = createdDonation.id
         setCreatedDonationId(donationId)
-        onSaved()
       }
 
       const selectedAttachments = Object.entries(attachments) as [AttachmentField, File | null][]
@@ -245,6 +315,7 @@ function DonationDraftModal({
           'La donación fue creada, pero uno o más documentos no pudieron guardarse. Puede reintentar.',
         )
         setStatusType('error')
+        await onSaved()
         return
       }
 
@@ -254,10 +325,12 @@ function DonationDraftModal({
           : 'Donación guardada correctamente.',
       )
       setStatusType('success')
-      setForm(initialForm)
-      setAttachments(initialAttachments)
-      setCreatedDonationId(null)
-      await new Promise((resolve) => window.setTimeout(resolve, 700))
+      await onSaved()
+      setIsClosing(true)
+      const closingDelay = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 0
+        : 180
+      await new Promise((resolve) => window.setTimeout(resolve, closingDelay))
       onClose()
     } catch (error) {
       setStatusMessage(
@@ -267,6 +340,7 @@ function DonationDraftModal({
       )
       setStatusType('error')
     } finally {
+      operationLockedRef.current = false
       setIsSaving(false)
     }
   }
@@ -321,12 +395,20 @@ function DonationDraftModal({
     })
   }
 
-  const selectedAttachmentCount = Object.values(attachments).filter(Boolean).length
+  const selectedAttachmentCount = [
+    attachments.initialRecord,
+    attachments.executiveAuthorization,
+  ].filter(Boolean).length
 
   return (
-    <div className="donation-modal-overlay" role="presentation">
+    <div
+      className={`donation-modal-overlay${
+        isClosing ? ' donation-modal-overlay--closing' : ''
+      }`}
+      role="presentation"
+    >
       <div
-        className="donation-modal"
+        className={`donation-modal${isClosing ? ' donation-modal--closing' : ''}`}
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
@@ -430,22 +512,17 @@ function DonationDraftModal({
 
                 <div className="donation-field">
                   <label htmlFor="tipo-gestion">Tipo de gestión</label>
-                  <select
+                  <FormSelect
                     id="tipo-gestion"
                     name="tipoGestion"
                     value={form.tipoGestion}
-                    onChange={(event) => updateField('tipoGestion', event.target.value)}
+                    options={managementTypeOptions}
+                    onChange={(value) => updateField('tipoGestion', value)}
+                    disabled={isSaving}
                     required
-                    aria-invalid={Boolean(errors.tipoGestion)}
-                    aria-describedby={errors.tipoGestion ? 'tipo-gestion-error' : undefined}
-                  >
-                    <option value="">Seleccione una opción</option>
-                    {managementTypeOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
+                    ariaInvalid={Boolean(errors.tipoGestion)}
+                    ariaDescribedBy={errors.tipoGestion ? 'tipo-gestion-error' : undefined}
+                  />
                   {errors.tipoGestion && (
                     <p className="donation-field-error" id="tipo-gestion-error" role="alert">
                       {errors.tipoGestion}
@@ -467,15 +544,15 @@ function DonationDraftModal({
 
                 <div className="donation-field">
                   <label htmlFor="fecha-recepcion">Fecha de recepción</label>
-                  <input
+                  <DatePicker
                     id="fecha-recepcion"
                     name="fechaRecepcion"
-                    type="date"
                     value={form.fechaRecepcion}
-                    onChange={(event) => updateField('fechaRecepcion', event.target.value)}
+                    onChange={(value) => updateField('fechaRecepcion', value)}
+                    disabled={isSaving}
                     required
-                    aria-invalid={Boolean(errors.fechaRecepcion)}
-                    aria-describedby={errors.fechaRecepcion ? 'fecha-recepcion-error' : undefined}
+                    ariaInvalid={Boolean(errors.fechaRecepcion)}
+                    ariaDescribedBy={errors.fechaRecepcion ? 'fecha-recepcion-error' : undefined}
                   />
                   {errors.fechaRecepcion && (
                     <p className="donation-field-error" id="fecha-recepcion-error" role="alert">
@@ -484,24 +561,24 @@ function DonationDraftModal({
                   )}
                 </div>
 
-                <div className="donation-field">
+                <div className="donation-field donation-field--wide">
                   <label htmlFor="lugar-recepcion">Lugar de recepción</label>
-                  <select
+                  <FormMultiSelect
                     id="lugar-recepcion"
-                    name="lugarRecepcion"
-                    value={form.lugarRecepcion}
-                    onChange={(event) => updateField('lugarRecepcion', event.target.value)}
+                    values={form.lugarRecepcion}
+                    options={receptionPlaces.map((place) => ({
+                      value: place.id,
+                      label: place.nombre,
+                    }))}
+                    onChange={updateReceptionPlaces}
+                    disabled={isSaving}
                     required
-                    aria-invalid={Boolean(errors.lugarRecepcion)}
-                    aria-describedby={errors.lugarRecepcion ? 'lugar-recepcion-error' : undefined}
-                  >
-                    <option value="">Seleccione una opción</option>
-                    {receptionPlaceOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
+                    loading={isReceptionPlacesLoading}
+                    error={receptionPlacesError}
+                    onRetry={() => void loadReceptionPlaces()}
+                    ariaInvalid={Boolean(errors.lugarRecepcion)}
+                    ariaDescribedBy={errors.lugarRecepcion ? 'lugar-recepcion-error' : undefined}
+                  />
                   {errors.lugarRecepcion && (
                     <p className="donation-field-error" id="lugar-recepcion-error" role="alert">
                       {errors.lugarRecepcion}
@@ -649,6 +726,193 @@ function DonationDraftModal({
                     {attachmentErrors.executiveAuthorization && (
                       <p className="attachment-error" role="alert">
                         {attachmentErrors.executiveAuthorization}
+                      </p>
+                    )}
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <section className="donation-form-section" aria-labelledby="upc-info-title">
+              <div className="donation-section-heading">
+                <span>Sección 2</span>
+                <h3 id="upc-info-title">
+                  Información de Representante de Unidad de Programas y Cooperación (UPC)
+                </h3>
+              </div>
+
+              <div className="donation-fields-grid">
+                <div className="donation-field donation-field--wide">
+                  <label htmlFor="representante-upc">Representante UPC</label>
+                  <FormSelect
+                    id="representante-upc"
+                    name="representanteUpc"
+                    value={form.representanteUpc}
+                    options={upcRepresentatives.map((representative) => ({
+                      value: representative.id,
+                      label: representative.nombre,
+                    }))}
+                    onChange={(value) => updateField('representanteUpc', value)}
+                    placeholder="Seleccione un representante"
+                    disabled={isSaving}
+                    loading={isUpcRepresentativesLoading}
+                    error={upcRepresentativesError}
+                    onRetry={() => void loadUpcRepresentatives()}
+                  />
+                </div>
+              </div>
+
+              <div className="supporting-documents">
+                <div className="supporting-documents-heading">
+                  <div>
+                    <span>Documento de la Sección 2</span>
+                    <h4>Acta de Donación emitida por CONAPINA</h4>
+                    <p>El archivo seleccionado se cargará al guardar el borrador.</p>
+                  </div>
+                  <strong>
+                    {attachments.conapinaRecord
+                      ? 'Documento seleccionado'
+                      : 'Sin documento seleccionado'}
+                  </strong>
+                </div>
+
+                <div className="attachment-grid attachment-grid--single">
+                  <article className="attachment-card">
+                    <div className="attachment-card-heading">
+                      <div className="attachment-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M6 2h8l5 5v15H6V2Zm2 2v16h9V8h-4V4H8Zm7 1.4V6h.6L15 5.4ZM10 11h5v2h-5v-2Zm0 4h5v2h-5v-2Z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h5>Acta de Donación emitida por CONAPINA</h5>
+                        <p>Documento institucional asociado al donativo</p>
+                      </div>
+                    </div>
+                    <div className="attachment-picker">
+                      <input
+                        className="attachment-file-input"
+                        id="conapina-record-file"
+                        name="conapinaRecordFile"
+                        type="file"
+                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        disabled={isSaving}
+                        onChange={(event) => {
+                          updateAttachment('conapinaRecord', event.target.files?.[0])
+                          event.currentTarget.value = ''
+                        }}
+                      />
+                      <label htmlFor="conapina-record-file">
+                        {attachments.conapinaRecord
+                          ? 'Reemplazar archivo'
+                          : 'Seleccionar archivo'}
+                      </label>
+                      <span title={attachments.conapinaRecord?.name}>
+                        {attachments.conapinaRecord ? (
+                          <>
+                            {attachments.conapinaRecord.name}
+                            <small>{formatFileSize(attachments.conapinaRecord.size)}</small>
+                          </>
+                        ) : (
+                          'Ningún archivo seleccionado'
+                        )}
+                      </span>
+                      {attachments.conapinaRecord && (
+                        <button
+                          className="attachment-remove-button"
+                          type="button"
+                          onClick={() => removeAttachment('conapinaRecord')}
+                          disabled={isSaving}
+                        >
+                          Quitar
+                        </button>
+                      )}
+                    </div>
+                    {attachmentErrors.conapinaRecord && (
+                      <p className="attachment-error" role="alert">
+                        {attachmentErrors.conapinaRecord}
+                      </p>
+                    )}
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <section className="donation-form-section" aria-labelledby="agreement-title">
+              <div className="donation-section-heading">
+                <span>Sección 3</span>
+                <h3 id="agreement-title">Documento de acuerdo de donación</h3>
+              </div>
+
+              <div className="supporting-documents">
+                <div className="supporting-documents-heading">
+                  <div>
+                    <span>Documento de la Sección 3</span>
+                    <h4>Acuerdo de Donación</h4>
+                    <p>El archivo seleccionado se cargará al guardar el borrador.</p>
+                  </div>
+                  <strong>
+                    {attachments.donationAgreement
+                      ? 'Documento seleccionado'
+                      : 'Sin documento seleccionado'}
+                  </strong>
+                </div>
+
+                <div className="attachment-grid attachment-grid--single">
+                  <article className="attachment-card">
+                    <div className="attachment-card-heading">
+                      <div className="attachment-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M6 2h8l5 5v15H6V2Zm2 2v16h9V8h-4V4H8Zm7 1.4V6h.6L15 5.4ZM10 11h5v2h-5v-2Zm0 4h5v2h-5v-2Z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h5>Acuerdo de Donación</h5>
+                        <p>Documento de acuerdo asociado al donativo</p>
+                      </div>
+                    </div>
+                    <div className="attachment-picker">
+                      <input
+                        className="attachment-file-input"
+                        id="donation-agreement-file"
+                        name="donationAgreementFile"
+                        type="file"
+                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        disabled={isSaving}
+                        onChange={(event) => {
+                          updateAttachment('donationAgreement', event.target.files?.[0])
+                          event.currentTarget.value = ''
+                        }}
+                      />
+                      <label htmlFor="donation-agreement-file">
+                        {attachments.donationAgreement
+                          ? 'Reemplazar archivo'
+                          : 'Seleccionar archivo'}
+                      </label>
+                      <span title={attachments.donationAgreement?.name}>
+                        {attachments.donationAgreement ? (
+                          <>
+                            {attachments.donationAgreement.name}
+                            <small>{formatFileSize(attachments.donationAgreement.size)}</small>
+                          </>
+                        ) : (
+                          'Ningún archivo seleccionado'
+                        )}
+                      </span>
+                      {attachments.donationAgreement && (
+                        <button
+                          className="attachment-remove-button"
+                          type="button"
+                          onClick={() => removeAttachment('donationAgreement')}
+                          disabled={isSaving}
+                        >
+                          Quitar
+                        </button>
+                      )}
+                    </div>
+                    {attachmentErrors.donationAgreement && (
+                      <p className="attachment-error" role="alert">
+                        {attachmentErrors.donationAgreement}
                       </p>
                     )}
                   </article>

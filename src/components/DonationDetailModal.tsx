@@ -3,6 +3,8 @@ import {
   deleteDonationDocument,
   getDonationDetail,
   getDonationDocument,
+  getReceptionPlaces,
+  getUpcRepresentatives,
   updateDonation,
   uploadDonationDocument,
 } from '../services/donations'
@@ -11,7 +13,12 @@ import type {
   DonationDocumentItem,
   DonationDocumentType,
   DonationDraftInput,
+  ReceptionPlace,
+  UpcRepresentative,
 } from '../services/donations'
+import DatePicker from './form/DatePicker'
+import FormMultiSelect from './form/FormMultiSelect'
+import FormSelect from './form/FormSelect'
 import './DonationDraftModal.css'
 
 type DonationDetailModalProps = {
@@ -28,16 +35,22 @@ const managementTypes = [
   'Asistencia Humanitaria',
 ]
 
-const receptionPlaces = [
-  'Sede central CONAPINA',
-  'Dependencia institucional',
-  'Otro lugar de recepción',
-]
+type DocumentSlot = { type: DonationDocumentType; title: string }
 
-const documentSlots: { type: DonationDocumentType; title: string }[] = [
+const memorandumDocumentSlots: DocumentSlot[] = [
   { type: 'MEMO_INICIAL', title: 'Memorándum de registro inicial' },
   { type: 'MEMO_DE', title: 'Memorándum de autorización de Dirección Ejecutiva' },
 ]
+
+const conapinaRecordSlot: DocumentSlot = {
+  type: 'ACTA_CONAPINA',
+  title: 'Acta de Donación emitida por CONAPINA',
+}
+
+const donationAgreementSlot: DocumentSlot = {
+  type: 'ACUERDO_DONACION',
+  title: 'Acuerdo de Donación',
+}
 
 function toForm(detail: DonationDetail): DonationDraftInput {
   return {
@@ -46,8 +59,9 @@ function toForm(detail: DonationDetail): DonationDraftInput {
     tipo_gestion: detail.tipo_gestion,
     dpto_seccion: detail.dpto_seccion ?? '',
     fecha_recepcion: detail.fecha_recepcion.slice(0, 10),
-    lugar_recepcion: detail.lugar_recepcion,
+    lugar_recepcion: detail.lugar_recepcion.map((place) => place.id),
     observaciones: detail.observaciones ?? '',
+    representante_upc: detail.representante_upc?.id ?? '',
   }
 }
 
@@ -72,6 +86,12 @@ function DonationDetailModal({
   const [isSaving, setIsSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [hasError, setHasError] = useState(false)
+  const [receptionPlaces, setReceptionPlaces] = useState<ReceptionPlace[]>([])
+  const [isReceptionPlacesLoading, setIsReceptionPlacesLoading] = useState(true)
+  const [receptionPlacesError, setReceptionPlacesError] = useState('')
+  const [upcRepresentatives, setUpcRepresentatives] = useState<UpcRepresentative[]>([])
+  const [isUpcRepresentativesLoading, setIsUpcRepresentativesLoading] = useState(true)
+  const [upcRepresentativesError, setUpcRepresentativesError] = useState('')
 
   const loadDetail = useCallback(async () => {
     setIsLoading(true)
@@ -90,9 +110,41 @@ function DonationDetailModal({
     }
   }, [authToken, donationId])
 
+  const loadReceptionPlaces = useCallback(async () => {
+    setIsReceptionPlacesLoading(true)
+    setReceptionPlacesError('')
+    try {
+      setReceptionPlaces(await getReceptionPlaces(authToken))
+    } catch {
+      setReceptionPlacesError('No fue posible cargar los lugares de recepción.')
+    } finally {
+      setIsReceptionPlacesLoading(false)
+    }
+  }, [authToken])
+
   useEffect(() => {
     void loadDetail()
   }, [loadDetail])
+
+  useEffect(() => {
+    void loadReceptionPlaces()
+  }, [loadReceptionPlaces])
+
+  const loadUpcRepresentatives = useCallback(async () => {
+    setIsUpcRepresentativesLoading(true)
+    setUpcRepresentativesError('')
+    try {
+      setUpcRepresentatives(await getUpcRepresentatives(authToken))
+    } catch {
+      setUpcRepresentativesError('No fue posible cargar los representantes UPC.')
+    } finally {
+      setIsUpcRepresentativesLoading(false)
+    }
+  }, [authToken])
+
+  useEffect(() => {
+    void loadUpcRepresentatives()
+  }, [loadUpcRepresentatives])
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
@@ -107,7 +159,10 @@ function DonationDetailModal({
     }
   }, [isSaving, onClose])
 
-  const setField = (field: keyof DonationDraftInput, value: string) => {
+  const setField = <Field extends keyof DonationDraftInput,>(
+    field: Field,
+    value: DonationDraftInput[Field],
+  ) => {
     setForm((current) => (current ? { ...current, [field]: value } : current))
   }
 
@@ -146,7 +201,7 @@ function DonationDetailModal({
       !form.nombre_proyecto.trim() ||
       !form.tipo_gestion ||
       !form.fecha_recepcion ||
-      !form.lugar_recepcion
+      form.lugar_recepcion.length === 0
     ) {
       setHasError(true)
       setMessage('Revise los campos requeridos antes de continuar.')
@@ -203,7 +258,7 @@ function DonationDetailModal({
   const removeDocument = async (document: DonationDocumentItem) => {
     if (
       !window.confirm(
-        `¿Eliminar lógicamente ${document.nombre_archivo}? El archivo se conservará, pero el índice actual impedirá agregar otro del mismo tipo hasta ajustar el esquema.`,
+        `¿Eliminar ${document.nombre_archivo} del donativo?`,
       )
     )
       return
@@ -216,6 +271,107 @@ function DonationDetailModal({
       setMessage('No fue posible eliminar el documento.')
     }
   }
+
+  const clearPendingDocument = (type: DonationDocumentType) => {
+    setPendingDocuments((current) => {
+      const nextDocuments = { ...current }
+      delete nextDocuments[type]
+      return nextDocuments
+    })
+  }
+
+  const renderDocumentSlot = (slot: DocumentSlot) => {
+    const document = documents.find((item) => item.tipo_documento === slot.type)
+    const pending = pendingDocuments[slot.type]
+    const fileInputId = `detail-${slot.type}`
+
+    return (
+      <article className="attachment-card" key={slot.type}>
+        <div className="attachment-card-heading">
+          <div className="attachment-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M6 2h8l5 5v15H6V2Zm2 2v16h9V8h-4V4H8Zm7 1.4V6h.6L15 5.4ZM10 11h5v2h-5v-2Zm0 4h5v2h-5v-2Z" />
+            </svg>
+          </div>
+          <div>
+            <h5>{slot.title}</h5>
+            <p>
+              {pending
+                ? `${pending.name} · ${formatBytes(pending.size)}`
+                : document
+                  ? `${document.nombre_archivo} · ${formatBytes(document.size_bytes)}`
+                  : 'Sin documento'}
+            </p>
+          </div>
+        </div>
+
+        {isEditing && (
+          <div className="attachment-picker">
+            <input
+              className="attachment-file-input"
+              id={fileInputId}
+              type="file"
+              accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={(event) => {
+                selectDocument(slot.type, event.target.files?.[0])
+                event.currentTarget.value = ''
+              }}
+            />
+            <label htmlFor={fileInputId}>
+              {document || pending ? 'Reemplazar archivo' : 'Seleccionar archivo'}
+            </label>
+            <span>{pending?.name ?? 'Ningún archivo seleccionado'}</span>
+          </div>
+        )}
+
+        {document ? (
+          <div className="document-actions">
+            <button type="button" onClick={() => void viewDocument(document)}>
+              Ver
+            </button>
+            {isEditing && (
+              <button
+                className="document-action--danger"
+                type="button"
+                onClick={() => void removeDocument(document)}
+              >
+                Eliminar
+              </button>
+            )}
+            {isEditing && pending && (
+              <button type="button" onClick={() => clearPendingDocument(slot.type)}>
+                Quitar selección
+              </button>
+            )}
+          </div>
+        ) : isEditing ? (
+          pending && (
+            <div className="document-actions">
+              <button type="button" onClick={() => clearPendingDocument(slot.type)}>
+                Quitar selección
+              </button>
+            </div>
+          )
+        ) : (
+          <p className="document-empty-copy">Sin documento</p>
+        )}
+      </article>
+    )
+  }
+
+  const receptionPlacesById = new Map(
+    [...receptionPlaces, ...(detail?.lugar_recepcion ?? [])].map((place) => [
+      place.id,
+      place,
+    ]),
+  )
+  const availableReceptionPlaces = [...receptionPlacesById.values()]
+  const upcRepresentativesById = new Map(
+    [...upcRepresentatives, ...(detail?.representante_upc ? [detail.representante_upc] : [])].map(
+      (representative) => [representative.id, representative],
+    ),
+  )
+  const availableUpcRepresentatives = [...upcRepresentativesById.values()]
 
   return (
     <div className="donation-modal-overlay" role="presentation">
@@ -263,30 +419,92 @@ function DonationDetailModal({
                     <div className="donation-field"><label>Tipo de registro *</label><input value={form.tipo_registro} onChange={(event) => setField('tipo_registro', event.target.value)} disabled={!isEditing} /></div>
                     <div className="donation-field"><label>Estado</label><input value={detail.estado} readOnly /></div>
                     <div className="donation-field donation-field--wide"><label>Nombre del proyecto / donativo *</label><input value={form.nombre_proyecto} onChange={(event) => setField('nombre_proyecto', event.target.value)} disabled={!isEditing} /></div>
-                    <div className="donation-field"><label>Tipo de gestión *</label><select value={form.tipo_gestion} onChange={(event) => setField('tipo_gestion', event.target.value)} disabled={!isEditing}><option value="">Seleccione una opción</option>{managementTypes.map((value) => <option key={value}>{value}</option>)}</select></div>
+                    <div className="donation-field"><label htmlFor="detail-tipo-gestion">Tipo de gestión *</label><FormSelect id="detail-tipo-gestion" value={form.tipo_gestion} options={managementTypes} onChange={(value) => setField('tipo_gestion', value)} disabled={!isEditing} required /></div>
                     <div className="donation-field"><label>Departamento / Sección / Otros</label><input value={form.dpto_seccion} onChange={(event) => setField('dpto_seccion', event.target.value)} disabled={!isEditing} /></div>
-                    <div className="donation-field"><label>Fecha de recepción *</label><input type="date" value={form.fecha_recepcion} onChange={(event) => setField('fecha_recepcion', event.target.value)} disabled={!isEditing} /></div>
-                    <div className="donation-field"><label>Lugar de recepción *</label><select value={form.lugar_recepcion} onChange={(event) => setField('lugar_recepcion', event.target.value)} disabled={!isEditing}><option value="">Seleccione una opción</option>{receptionPlaces.map((value) => <option key={value}>{value}</option>)}</select></div>
+                    <div className="donation-field"><label htmlFor="detail-fecha-recepcion">Fecha de recepción *</label><DatePicker id="detail-fecha-recepcion" value={form.fecha_recepcion} onChange={(value) => setField('fecha_recepcion', value)} disabled={!isEditing} required /></div>
+                    <div className="donation-field donation-field--wide"><label htmlFor="detail-lugar-recepcion">Lugar de recepción *</label><FormMultiSelect id="detail-lugar-recepcion" values={form.lugar_recepcion} options={availableReceptionPlaces.map((place) => ({ value: place.id, label: place.nombre }))} onChange={(values) => setField('lugar_recepcion', values)} disabled={!isEditing} required loading={isEditing && isReceptionPlacesLoading} error={isEditing ? receptionPlacesError : undefined} onRetry={() => void loadReceptionPlaces()} /></div>
                     <div className="donation-field donation-field--wide"><label>Observaciones</label><textarea rows={3} value={form.observaciones} onChange={(event) => setField('observaciones', event.target.value)} disabled={!isEditing} /></div>
                   </div>
 
                   <div className="supporting-documents">
-                    <div className="supporting-documents-heading"><div><span>Sub-Sección 1.2</span><h4>Memorándums</h4><p>Documentos activos asociados al donativo.</p></div><strong>{documents.length} activos</strong></div>
+                    <div className="supporting-documents-heading"><div><span>Sub-Sección 1.2</span><h4>Memorándums</h4><p>Documentos activos asociados al donativo.</p></div><strong>{memorandumDocumentSlots.filter((slot) => documents.some((document) => document.tipo_documento === slot.type)).length} activos</strong></div>
                     <div className="attachment-grid">
-                      {documentSlots.map((slot) => {
-                        const document = documents.find((item) => item.tipo_documento === slot.type)
-                        const pending = pendingDocuments[slot.type]
-                        return (
-                          <article className="attachment-card" key={slot.type}>
-                            <div className="attachment-card-heading"><div className="attachment-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6V2Zm2 2v16h9V8h-4V4H8Zm7 1.4V6h.6L15 5.4ZM10 11h5v2h-5v-2Zm0 4h5v2h-5v-2Z" /></svg></div><div><h5>{slot.title}</h5><p>{document ? `${document.nombre_archivo} · ${formatBytes(document.size_bytes)}` : pending ? `${pending.name} · ${formatBytes(pending.size)}` : 'Sin documento'}</p></div></div>
-                            {document ? (
-                              <div className="document-actions"><button type="button" onClick={() => void viewDocument(document)}>Ver</button>{isEditing && <><button type="button" disabled title="Requiere ajustar el índice UNIQUE para conservar historial">Reemplazar</button><button className="document-action--danger" type="button" onClick={() => void removeDocument(document)}>Eliminar</button></>}</div>
-                            ) : isEditing ? (
-                              <div className="attachment-picker"><input className="attachment-file-input" id={`detail-${slot.type}`} type="file" accept=".pdf,.doc,.docx" onChange={(event) => { selectDocument(slot.type, event.target.files?.[0]); event.currentTarget.value = '' }} /><label htmlFor={`detail-${slot.type}`}>{pending ? 'Reemplazar selección' : 'Seleccionar archivo'}</label><span>{pending?.name ?? 'Ningún archivo seleccionado'}</span></div>
-                            ) : <p className="document-empty-copy">Sin documento</p>}
-                          </article>
+                      {memorandumDocumentSlots.map(renderDocumentSlot)}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="donation-form-section">
+                  <div className="donation-section-heading">
+                    <span>Sección 2</span>
+                    <h3>
+                      Información de Representante de Unidad de Programas y Cooperación (UPC)
+                    </h3>
+                  </div>
+                  <div className="donation-fields-grid">
+                    <div className="donation-field donation-field--wide">
+                      <label htmlFor="detail-representante-upc">Representante UPC</label>
+                      <FormSelect
+                        id="detail-representante-upc"
+                        value={form.representante_upc}
+                        options={availableUpcRepresentatives.map((representative) => ({
+                          value: representative.id,
+                          label: representative.nombre,
+                        }))}
+                        onChange={(value) => setField('representante_upc', value)}
+                        placeholder={isEditing ? 'Seleccione un representante' : 'Sin representante'}
+                        disabled={!isEditing}
+                        loading={isEditing && isUpcRepresentativesLoading}
+                        error={isEditing ? upcRepresentativesError : undefined}
+                        onRetry={() => void loadUpcRepresentatives()}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="supporting-documents">
+                    <div className="supporting-documents-heading">
+                      <div>
+                        <span>Documento de la Sección 2</span>
+                        <h4>Acta de Donación emitida por CONAPINA</h4>
+                        <p>Documento activo asociado al donativo.</p>
+                      </div>
+                      <strong>
+                        {documents.some(
+                          (document) => document.tipo_documento === 'ACTA_CONAPINA',
                         )
-                      })}
+                          ? '1 activo'
+                          : 'Sin documento'}
+                      </strong>
+                    </div>
+                    <div className="attachment-grid attachment-grid--single">
+                      {renderDocumentSlot(conapinaRecordSlot)}
+                    </div>
+                  </div>
+                </section>
+
+                <section className="donation-form-section">
+                  <div className="donation-section-heading">
+                    <span>Sección 3</span>
+                    <h3>Documento de acuerdo de donación</h3>
+                  </div>
+
+                  <div className="supporting-documents">
+                    <div className="supporting-documents-heading">
+                      <div>
+                        <span>Documento de la Sección 3</span>
+                        <h4>Acuerdo de Donación</h4>
+                        <p>Documento activo asociado al donativo.</p>
+                      </div>
+                      <strong>
+                        {documents.some(
+                          (document) => document.tipo_documento === 'ACUERDO_DONACION',
+                        )
+                          ? '1 activo'
+                          : 'Sin documento'}
+                      </strong>
+                    </div>
+                    <div className="attachment-grid attachment-grid--single">
+                      {renderDocumentSlot(donationAgreementSlot)}
                     </div>
                   </div>
                 </section>
