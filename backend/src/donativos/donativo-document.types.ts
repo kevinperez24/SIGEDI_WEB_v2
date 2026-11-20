@@ -1,4 +1,8 @@
-export type DonationDocumentType = 'MEMO_INICIAL' | 'MEMO_DE'
+export type DonationDocumentType =
+  | 'MEMO_INICIAL'
+  | 'MEMO_DE'
+  | 'ACTA_CONAPINA'
+  | 'ACUERDO_DONACION'
 
 export type DonationDocumentUpload = {
   tipoDocumento: DonationDocumentType
@@ -38,3 +42,5 @@ export type DonationDocumentItem = {
 export type DonationDocumentFile = DonationDocumentItem & {
   ruta_archivo: string
 }
+
+export type StoredDonationDocument = Pick<DonationDocumentFile, 'id' | 'ruta_archivo'>

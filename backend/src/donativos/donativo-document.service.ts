@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, extname, resolve } from 'node:path'
+import { basename, dirname, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { TextCodec } from 'surrealdb'
 import type { DonationDocumentRepository } from './donativo-document.repository.ts'
@@ -31,7 +31,6 @@ const allowedFiles = {
 
 export class DonationDocumentValidationError extends Error {}
 export class DonationNotFoundError extends Error {}
-export class DonationDocumentConflictError extends Error {}
 export class DonationDocumentNotFoundError extends Error {}
 
 export type DownloadedDonationDocument = {
@@ -57,12 +56,20 @@ export class DonationDocumentService {
       throw new DonationNotFoundError()
     }
 
-    if (await this.repository.documentExists(donativoId, upload.tipoDocumento)) {
-      throw new DonationDocumentConflictError()
-    }
+    const existingDocument = await this.repository.findByType(
+      donativoId,
+      upload.tipoDocumento,
+    )
 
     const fileRule = allowedFiles[upload.mimeType as keyof typeof allowedFiles]
-    const prefix = upload.tipoDocumento === 'MEMO_INICIAL' ? 'memo_inicial' : 'memo_de'
+    const prefix =
+      upload.tipoDocumento === 'MEMO_INICIAL'
+        ? 'memo_inicial'
+        : upload.tipoDocumento === 'MEMO_DE'
+          ? 'memo_de'
+          : upload.tipoDocumento === 'ACTA_CONAPINA'
+            ? 'acta_conapina'
+            : 'acuerdo_donacion'
     const storedName = `${prefix}_${randomUUID()}${fileRule.extension}`
     const relativePath = `donativos/${donativoKey}/${storedName}`
     const physicalDirectory = resolve(this.storageRoot, donativoKey)
@@ -72,7 +79,7 @@ export class DonationDocumentService {
     await writeFile(physicalPath, upload.contents, { flag: 'wx' })
 
     try {
-      return await this.repository.create({
+      const metadata = {
         donativoId,
         tipoDocumento: upload.tipoDocumento,
         originalName: upload.originalName,
@@ -81,7 +88,23 @@ export class DonationDocumentService {
         mimeType: upload.mimeType,
         sizeBytes: upload.contents.byteLength,
         createdBy,
-      })
+      }
+      const savedDocument = existingDocument
+        ? await this.repository.replace(existingDocument.id, metadata)
+        : await this.repository.create(metadata)
+
+      if (existingDocument) {
+        const previousPhysicalPath = resolve(
+          this.storageRoot,
+          donativoKey,
+          basename(existingDocument.ruta_archivo),
+        )
+        if (previousPhysicalPath !== physicalPath) {
+          await rm(previousPhysicalPath, { force: true }).catch(() => undefined)
+        }
+      }
+
+      return savedDocument
     } catch (error) {
       await rm(physicalPath, { force: true }).catch(() => undefined)
       throw error
@@ -131,7 +154,12 @@ export class DonationDocumentService {
   private validate(donativoId: string, upload: DonationDocumentUpload): string {
     const donativoKey = this.parseDonationId(donativoId)
 
-    if (upload.tipoDocumento !== 'MEMO_INICIAL' && upload.tipoDocumento !== 'MEMO_DE') {
+    if (
+      upload.tipoDocumento !== 'MEMO_INICIAL' &&
+      upload.tipoDocumento !== 'MEMO_DE' &&
+      upload.tipoDocumento !== 'ACTA_CONAPINA' &&
+      upload.tipoDocumento !== 'ACUERDO_DONACION'
+    ) {
       throw new DonationDocumentValidationError()
     }
 

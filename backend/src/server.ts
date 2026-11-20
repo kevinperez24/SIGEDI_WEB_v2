@@ -2,6 +2,8 @@ import { createServer } from 'node:http'
 import { AuthService } from './auth/auth.service.ts'
 import { SurrealAuthRepository } from './auth/auth.repository.ts'
 import { AuthSessionStore } from './auth/auth-session.ts'
+import { ReceptionPlaceCatalogRepository } from './catalogos/lugar-recepcion.repository.ts'
+import { UpcRepresentativeCatalogRepository } from './catalogos/representante-upc.repository.ts'
 import { getConfig } from './config.ts'
 import { closeSurreal } from './database/surreal.ts'
 import { DonationService } from './donativos/donativo.service.ts'
@@ -17,6 +19,8 @@ const donationService = new DonationService(new SurrealDonationRepository())
 const donationDocumentService = new DonationDocumentService(
   new SurrealDonationDocumentRepository(),
 )
+const receptionPlaceCatalogRepository = new ReceptionPlaceCatalogRepository()
+const upcRepresentativeCatalogRepository = new UpcRepresentativeCatalogRepository()
 
 const server = createServer(
   createRequestHandler({
@@ -36,6 +40,12 @@ const server = createServer(
       donationDocumentService.download(donativoId, documentId),
     deleteDonationDocument: (donativoId, documentId, updatedBy) =>
       donationDocumentService.logicalDelete(donativoId, documentId, updatedBy),
+    listReceptionPlaces: () => receptionPlaceCatalogRepository.listActive(),
+    validateReceptionPlaces: (ids) => receptionPlaceCatalogRepository.validateActiveIds(ids),
+    listUpcRepresentatives: () => upcRepresentativeCatalogRepository.listActive(),
+    validateUpcRepresentative: (id) =>
+      upcRepresentativeCatalogRepository.validateActiveId(id),
+    deleteDonation: (donativoId) => donationService.delete(donativoId),
   }),
 )
 

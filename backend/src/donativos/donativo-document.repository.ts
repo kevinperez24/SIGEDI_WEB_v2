@@ -7,17 +7,11 @@ import type {
   DonationDocumentItem,
   DonationDocumentMetadata,
   DonationDocumentType,
+  StoredDonationDocument,
 } from './donativo-document.types.ts'
 
 const DONATION_EXISTS_QUERY = `
   SELECT id FROM donativos WHERE id = $donativo_id LIMIT 1;
-`
-
-const DOCUMENT_EXISTS_QUERY = `
-  SELECT id
-  FROM donativo_documentos
-  WHERE donativo_id = $donativo_id AND tipo_documento = $tipo_documento
-  LIMIT 1;
 `
 
 const CREATE_DOCUMENT_QUERY = `
@@ -56,6 +50,36 @@ const FIND_ACTIVE_DOCUMENT_QUERY = `
   FROM donativo_documentos
   WHERE id = $documento_id AND donativo_id = $donativo_id AND estado = 'ACTIVO'
   LIMIT 1;
+`
+
+const FIND_DOCUMENT_BY_TYPE_QUERY = `
+  SELECT
+    id,
+    tipo_documento,
+    nombre_archivo,
+    mime_type,
+    size_bytes,
+    estado,
+    created_at,
+    ruta_archivo
+  FROM donativo_documentos
+  WHERE donativo_id = $donativo_id AND tipo_documento = $tipo_documento
+  ORDER BY created_at DESC
+  LIMIT 1;
+`
+
+const REPLACE_DOCUMENT_QUERY = `
+  UPDATE $documento_id MERGE {
+    nombre_archivo: $nombre_archivo,
+    nombre_almacenado: $nombre_almacenado,
+    ruta_archivo: $ruta_archivo,
+    mime_type: $mime_type,
+    size_bytes: $size_bytes,
+    estado: 'ACTIVO',
+    updated_by: $updated_by
+  }
+  WHERE donativo_id = $donativo_id
+  RETURN id, tipo_documento, nombre_archivo, estado;
 `
 
 const DELETE_DOCUMENT_QUERY = `
@@ -109,8 +133,15 @@ function mapDocument(record: DocumentItemRecord): DonationDocumentItem {
 
 export interface DonationDocumentRepository {
   donationExists(donativoId: string): Promise<boolean>
-  documentExists(donativoId: string, tipoDocumento: DonationDocumentType): Promise<boolean>
+  findByType(
+    donativoId: string,
+    tipoDocumento: DonationDocumentType,
+  ): Promise<StoredDonationDocument | null>
   create(metadata: DonationDocumentMetadata): Promise<CreatedDonationDocument>
+  replace(
+    documentId: string,
+    metadata: DonationDocumentMetadata,
+  ): Promise<CreatedDonationDocument>
   listActive(donativoId: string): Promise<DonationDocumentItem[]>
   findActiveFile(donativoId: string, documentId: string): Promise<DonationDocumentFile | null>
   logicalDelete(donativoId: string, documentId: string, updatedBy: string): Promise<boolean>
@@ -119,16 +150,6 @@ export interface DonationDocumentRepository {
 export class SurrealDonationDocumentRepository implements DonationDocumentRepository {
   async donationExists(donativoId: string): Promise<boolean> {
     return this.exists(DONATION_EXISTS_QUERY, { donativo_id: donationRecordId(donativoId) })
-  }
-
-  async documentExists(
-    donativoId: string,
-    tipoDocumento: DonationDocumentType,
-  ): Promise<boolean> {
-    return this.exists(DOCUMENT_EXISTS_QUERY, {
-      donativo_id: donationRecordId(donativoId),
-      tipo_documento: tipoDocumento,
-    })
   }
 
   async create(metadata: DonationDocumentMetadata): Promise<CreatedDonationDocument> {
@@ -143,6 +164,64 @@ export class SurrealDonationDocumentRepository implements DonationDocumentReposi
         mime_type: metadata.mimeType,
         size_bytes: metadata.sizeBytes,
         created_by: metadata.createdBy,
+      })
+      const record = records[0]
+
+      if (!record || record.estado !== 'ACTIVO') throw new DatabaseQueryError()
+
+      return {
+        id: String(record.id),
+        tipo_documento: record.tipo_documento,
+        nombre_archivo: record.nombre_archivo,
+        estado: 'ACTIVO',
+      }
+    } catch (error) {
+      if (error instanceof DatabaseConnectionError || error instanceof DatabaseQueryError) {
+        throw error
+      }
+      throw new DatabaseQueryError()
+    }
+  }
+
+  async findByType(
+    donativoId: string,
+    tipoDocumento: DonationDocumentType,
+  ): Promise<StoredDonationDocument | null> {
+    try {
+      const database = await getSurreal()
+      const [records] = await database.query<[DocumentItemRecord[]]>(
+        FIND_DOCUMENT_BY_TYPE_QUERY,
+        {
+          donativo_id: donationRecordId(donativoId),
+          tipo_documento: tipoDocumento,
+        },
+      )
+      const record = records[0]
+      if (!record?.ruta_archivo) return null
+      return { id: String(record.id), ruta_archivo: record.ruta_archivo }
+    } catch (error) {
+      if (error instanceof DatabaseConnectionError || error instanceof DatabaseQueryError) {
+        throw error
+      }
+      throw new DatabaseQueryError()
+    }
+  }
+
+  async replace(
+    documentId: string,
+    metadata: DonationDocumentMetadata,
+  ): Promise<CreatedDonationDocument> {
+    try {
+      const database = await getSurreal()
+      const [records] = await database.query<[DocumentRecord[]]>(REPLACE_DOCUMENT_QUERY, {
+        documento_id: documentRecordId(documentId),
+        donativo_id: donationRecordId(metadata.donativoId),
+        nombre_archivo: metadata.originalName,
+        nombre_almacenado: metadata.storedName,
+        ruta_archivo: metadata.relativePath,
+        mime_type: metadata.mimeType,
+        size_bytes: metadata.sizeBytes,
+        updated_by: metadata.createdBy,
       })
       const record = records[0]
 

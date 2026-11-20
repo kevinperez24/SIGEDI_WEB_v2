@@ -1,8 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DatabaseConnectionError } from '../database/errors.ts'
 import type { AuthResult } from '../auth/auth.types.ts'
+import type { ReceptionPlace } from '../catalogos/lugar-recepcion.repository.ts'
+import type { UpcRepresentative } from '../catalogos/representante-upc.repository.ts'
 import {
-  DonationDocumentConflictError,
   DonationDocumentNotFoundError,
   DonationDocumentValidationError,
   DonationNotFoundError,
@@ -14,6 +15,11 @@ import type {
   DonationDocumentType,
   DonationDocumentUpload,
 } from '../donativos/donativo-document.types.ts'
+import {
+  DonationDeletionError,
+  DonationDeletionNotFoundError,
+  DonationDeletionValidationError,
+} from '../donativos/donativo.service.ts'
 import type {
   CreatedDonation,
   DonationCreateInput,
@@ -53,6 +59,11 @@ type DeleteDonationDocument = (
   documentId: string,
   updatedBy: string,
 ) => Promise<void>
+type ListReceptionPlaces = () => Promise<ReceptionPlace[]>
+type ValidateReceptionPlaces = (ids: string[]) => Promise<boolean>
+type ListUpcRepresentatives = () => Promise<UpcRepresentative[]>
+type ValidateUpcRepresentative = (id: string) => Promise<boolean>
+type DeleteDonation = (donativoId: string) => Promise<unknown>
 
 type AppDependencies = {
   authenticate: Authenticate
@@ -67,6 +78,11 @@ type AppDependencies = {
   listDonationDocuments: ListDonationDocuments
   downloadDonationDocument: DownloadDonationDocument
   deleteDonationDocument: DeleteDonationDocument
+  listReceptionPlaces: ListReceptionPlaces
+  validateReceptionPlaces: ValidateReceptionPlaces
+  listUpcRepresentatives: ListUpcRepresentatives
+  validateUpcRepresentative: ValidateUpcRepresentative
+  deleteDonation: DeleteDonation
 }
 
 type LoginBody = {
@@ -82,6 +98,7 @@ const DONATION_FIELDS = new Set([
   'fecha_recepcion',
   'lugar_recepcion',
   'observaciones',
+  'representante_upc',
 ])
 
 class RequestBodyError extends Error {
@@ -194,7 +211,10 @@ async function readDonationDocument(request: IncomingMessage): Promise<DonationD
     hasUnexpectedField ||
     formData.getAll('tipo_documento').length !== 1 ||
     formData.getAll('archivo').length !== 1 ||
-    (tipoDocumento !== 'MEMO_INICIAL' && tipoDocumento !== 'MEMO_DE') ||
+    (tipoDocumento !== 'MEMO_INICIAL' &&
+      tipoDocumento !== 'MEMO_DE' &&
+      tipoDocumento !== 'ACTA_CONAPINA' &&
+      tipoDocumento !== 'ACUERDO_DONACION') ||
     !(file instanceof File)
   ) {
     throw new RequestBodyError(400)
@@ -244,7 +264,7 @@ function readRequiredString(
 
 function readOptionalString(
   candidate: Record<string, unknown>,
-  field: 'dpto_seccion' | 'observaciones',
+  field: 'dpto_seccion' | 'observaciones' | 'representante_upc',
   maxLength: number,
 ): string | null {
   const value = candidate[field]
@@ -252,6 +272,16 @@ function readOptionalString(
   if (typeof value !== 'string') return null
   const normalized = value.trim()
   return normalized.length <= maxLength ? normalized : null
+}
+
+function readReceptionPlaces(candidate: Record<string, unknown>): string[] | null {
+  const value = candidate.lugar_recepcion
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) return null
+
+  const normalized = value.map((item) => (typeof item === 'string' ? item.trim() : ''))
+  if (normalized.some((item) => !item || item.length > 200)) return null
+  if (new Set(normalized).size !== normalized.length) return null
+  return normalized
 }
 
 function validateDonationBody(body: unknown): DonationCreateInput | null {
@@ -264,9 +294,10 @@ function validateDonationBody(body: unknown): DonationCreateInput | null {
   const nombre_proyecto = readRequiredString(candidate, 'nombre_proyecto', 500)
   const tipo_gestion = readRequiredString(candidate, 'tipo_gestion', 200)
   const fecha_recepcion = readRequiredString(candidate, 'fecha_recepcion', 10)
-  const lugar_recepcion = readRequiredString(candidate, 'lugar_recepcion', 300)
+  const lugar_recepcion = readReceptionPlaces(candidate)
   const dpto_seccion = readOptionalString(candidate, 'dpto_seccion', 300)
   const observaciones = readOptionalString(candidate, 'observaciones', 2_000)
+  const representante_upc = readOptionalString(candidate, 'representante_upc', 300)
 
   if (
     !tipo_registro ||
@@ -275,7 +306,8 @@ function validateDonationBody(body: unknown): DonationCreateInput | null {
     !fecha_recepcion ||
     !lugar_recepcion ||
     dpto_seccion === null ||
-    observaciones === null
+    observaciones === null ||
+    representante_upc === null
   ) {
     return null
   }
@@ -297,6 +329,7 @@ function validateDonationBody(body: unknown): DonationCreateInput | null {
     fecha_recepcion,
     lugar_recepcion,
     observaciones,
+    representante_upc,
   }
 }
 
@@ -320,6 +353,11 @@ export function createRequestHandler({
   listDonationDocuments,
   downloadDonationDocument,
   deleteDonationDocument,
+  listReceptionPlaces,
+  validateReceptionPlaces,
+  listUpcRepresentatives,
+  validateUpcRepresentative,
+  deleteDonation,
 }: AppDependencies) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (!applyCors(request, response, allowedOrigin)) {
@@ -336,6 +374,8 @@ export function createRequestHandler({
     }
 
     const isLoginRoute = url.pathname === '/api/auth/login'
+    const isReceptionPlacesRoute = url.pathname === '/api/catalogos/lugares-recepcion'
+    const isUpcRepresentativesRoute = url.pathname === '/api/catalogos/representantes-upc'
     const isDonationRoute = url.pathname === '/api/donativos'
     const donationDocumentMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)\/documentos$/)
     const isDonationDocumentRoute = donationDocumentMatch !== null
@@ -348,6 +388,8 @@ export function createRequestHandler({
 
     if (
       !isLoginRoute &&
+      !isReceptionPlacesRoute &&
+      !isUpcRepresentativesRoute &&
       !isDonationRoute &&
       !isDonationDocumentRoute &&
       !isDonationDocumentItemRoute &&
@@ -357,10 +399,12 @@ export function createRequestHandler({
       return
     }
 
-    const methodIsAllowed = isDonationRoute
+    const methodIsAllowed = isReceptionPlacesRoute || isUpcRepresentativesRoute
+      ? request.method === 'GET'
+      : isDonationRoute
       ? request.method === 'GET' || request.method === 'POST'
       : isDonationDetailRoute
-        ? request.method === 'GET' || request.method === 'PATCH'
+        ? request.method === 'GET' || request.method === 'PATCH' || request.method === 'DELETE'
         : isDonationDocumentItemRoute
           ? request.method === 'GET' || request.method === 'DELETE'
           : request.method === 'POST'
@@ -370,8 +414,10 @@ export function createRequestHandler({
         'Allow',
         isDonationRoute
           ? 'GET, POST, OPTIONS'
+          : isReceptionPlacesRoute || isUpcRepresentativesRoute
+            ? 'GET, OPTIONS'
           : isDonationDetailRoute
-            ? 'GET, PATCH, OPTIONS'
+            ? 'GET, PATCH, DELETE, OPTIONS'
             : isDonationDocumentItemRoute
               ? 'GET, DELETE, OPTIONS'
               : 'POST, OPTIONS',
@@ -381,6 +427,34 @@ export function createRequestHandler({
     }
 
     try {
+      if (isReceptionPlacesRoute) {
+        const token = readBearerToken(request)
+        const currentUser = token ? resolveSession(token) : null
+
+        if (!currentUser) {
+          sendJson(response, 401, { ok: false, message: 'Debe iniciar sesión nuevamente.' })
+          return
+        }
+
+        const lugares = await listReceptionPlaces()
+        sendJson(response, 200, { ok: true, lugares })
+        return
+      }
+
+      if (isUpcRepresentativesRoute) {
+        const token = readBearerToken(request)
+        const currentUser = token ? resolveSession(token) : null
+
+        if (!currentUser) {
+          sendJson(response, 401, { ok: false, message: 'Debe iniciar sesión nuevamente.' })
+          return
+        }
+
+        const representantes = await listUpcRepresentatives()
+        sendJson(response, 200, { ok: true, representantes })
+        return
+      }
+
       if (isDonationDocumentItemRoute) {
         const token = readBearerToken(request)
         const currentUser = token ? resolveSession(token) : null
@@ -414,6 +488,15 @@ export function createRequestHandler({
 
         const donativoId = decodeURIComponent(donationDetailMatch[1] ?? '')
 
+        if (request.method === 'DELETE') {
+          await deleteDonation(donativoId)
+          sendJson(response, 200, {
+            ok: true,
+            message: 'Donación eliminada correctamente.',
+          })
+          return
+        }
+
         if (request.method === 'GET') {
           const donativo = await getDonation(donativoId)
           if (!donativo) {
@@ -430,6 +513,24 @@ export function createRequestHandler({
           sendJson(response, 400, {
             ok: false,
             message: 'Los datos del donativo son inválidos.',
+          })
+          return
+        }
+
+        if (!(await validateReceptionPlaces(donationBody.lugar_recepcion))) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Seleccione lugares de recepción activos y válidos.',
+          })
+          return
+        }
+        if (
+          donationBody.representante_upc &&
+          !(await validateUpcRepresentative(donationBody.representante_upc))
+        ) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Seleccione un representante UPC activo y válido.',
           })
           return
         }
@@ -492,6 +593,24 @@ export function createRequestHandler({
           return
         }
 
+        if (!(await validateReceptionPlaces(donationBody.lugar_recepcion))) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Seleccione lugares de recepción activos y válidos.',
+          })
+          return
+        }
+        if (
+          donationBody.representante_upc &&
+          !(await validateUpcRepresentative(donationBody.representante_upc))
+        ) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Seleccione un representante UPC activo y válido.',
+          })
+          return
+        }
+
         const donativo = await createDonation(createdBy, donationBody)
         sendJson(response, 201, { ok: true, donativo })
         return
@@ -546,10 +665,21 @@ export function createRequestHandler({
         return
       }
 
-      if (error instanceof DonationDocumentConflictError) {
-        sendJson(response, 409, {
+      if (error instanceof DonationDeletionValidationError) {
+        sendJson(response, 400, { ok: false, message: 'El identificador del donativo no es válido.' })
+        return
+      }
+
+      if (error instanceof DonationDeletionNotFoundError) {
+        sendJson(response, 404, { ok: false, message: 'El donativo no existe.' })
+        return
+      }
+
+      if (error instanceof DonationDeletionError) {
+        console.error('[donativos] donation_deletion_failed')
+        sendJson(response, 500, {
           ok: false,
-          message: 'Ya existe un documento de este tipo para el donativo.',
+          message: 'No fue posible eliminar la donación en este momento.',
         })
         return
       }
@@ -559,7 +689,9 @@ export function createRequestHandler({
           ? 'database_connection_failed'
           : 'database_query_failed'
       const area =
-        isDonationDocumentRoute || isDonationDocumentItemRoute
+        isReceptionPlacesRoute || isUpcRepresentativesRoute
+          ? 'catalogos'
+          : isDonationDocumentRoute || isDonationDocumentItemRoute
           ? 'donativo_documentos'
           : isDonationRoute || isDonationDetailRoute
             ? 'donativos'
@@ -568,7 +700,9 @@ export function createRequestHandler({
 
       sendJson(response, 503, {
         ok: false,
-        message: isDonationDocumentRoute || isDonationDocumentItemRoute
+        message: isReceptionPlacesRoute || isUpcRepresentativesRoute
+          ? 'No fue posible cargar el catálogo solicitado.'
+          : isDonationDocumentRoute || isDonationDocumentItemRoute
           ? 'No fue posible guardar el documento en este momento.'
           : isDonationRoute || isDonationDetailRoute
           ? request.method === 'GET'
