@@ -29,10 +29,19 @@ import type {
   DonationDocumentUpload,
 } from '../donativos/donativo-document.types.ts'
 import type { DonationDocumentRepository } from '../donativos/donativo-document.repository.ts'
-import { DonationDocumentService } from '../donativos/donativo-document.service.ts'
+import {
+  DonationDocumentService,
+  DonationDocumentValidationError,
+} from '../donativos/donativo-document.service.ts'
 import type { DownloadedDonationDocument } from '../donativos/donativo-document.service.ts'
+import type { DonationActaRepository } from '../donativos/donativo-acta.repository.ts'
+import { DonationActaService, DonationActaValidationError } from '../donativos/donativo-acta.service.ts'
+import type { DonationActaSummary, DownloadedDonationActa } from '../donativos/donativo-acta.types.ts'
 import type { ReceptionPlace } from '../catalogos/lugar-recepcion.repository.ts'
 import type { UpcRepresentative } from '../catalogos/representante-upc.repository.ts'
+import type { Section5CatalogItem } from '../catalogos/seccion5.repository.ts'
+import type { CityCatalogItem } from '../catalogos/ciudad.repository.ts'
+import type { ConapinaReceptionManager } from '../catalogos/encargado-conapina.repository.ts'
 import { createRequestHandler } from '../http/app.ts'
 
 const servers: ReturnType<typeof createServer>[] = []
@@ -113,10 +122,26 @@ type TestServerOverrides = {
     documentId: string,
     updatedBy: string,
   ) => Promise<void>
+  createDonationActa?: (
+    donativoId: string,
+    createdBy: string,
+  ) => Promise<DonationActaSummary>
+  getActiveDonationActa?: (donativoId: string) => Promise<DonationActaSummary | null>
+  downloadDonationActa?: (donativoId: string) => Promise<DownloadedDonationActa>
   listReceptionPlaces?: () => Promise<ReceptionPlace[]>
   validateReceptionPlaces?: (ids: string[]) => Promise<boolean>
   listUpcRepresentatives?: () => Promise<UpcRepresentative[]>
   validateUpcRepresentative?: (id: string) => Promise<boolean>
+  listSafekeepingWarehouses?: () => Promise<Section5CatalogItem[]>
+  validateSafekeepingWarehouse?: (id: string) => Promise<boolean>
+  listDistributionPlaces?: () => Promise<Section5CatalogItem[]>
+  validateDistributionPlaces?: (ids: string[]) => Promise<boolean>
+  listDestinationWarehouses?: () => Promise<Section5CatalogItem[]>
+  validateDestinationWarehouse?: (id: string) => Promise<boolean>
+  listCities?: () => Promise<CityCatalogItem[]>
+  validateCity?: (id: string) => Promise<boolean>
+  listConapinaReceptionManagers?: () => Promise<ConapinaReceptionManager[]>
+  findConapinaReceptionManager?: (id: string) => Promise<ConapinaReceptionManager | null>
   deleteDonation?: (donativoId: string) => Promise<unknown>
 }
 
@@ -150,10 +175,33 @@ async function startTestServer(
       deleteDonationDocument: overrides.deleteDonationDocument ?? (async () => {
         throw new Error('No debe ejecutarse')
       }),
+      createDonationActa: overrides.createDonationActa ?? (async () => {
+        throw new Error('No debe ejecutarse')
+      }),
+      getActiveDonationActa: overrides.getActiveDonationActa ?? (async () => null),
+      downloadDonationActa: overrides.downloadDonationActa ?? (async () => {
+        throw new Error('No debe ejecutarse')
+      }),
       listReceptionPlaces: overrides.listReceptionPlaces ?? (async () => []),
       validateReceptionPlaces: overrides.validateReceptionPlaces ?? (async () => true),
       listUpcRepresentatives: overrides.listUpcRepresentatives ?? (async () => []),
       validateUpcRepresentative: overrides.validateUpcRepresentative ?? (async () => true),
+      listSafekeepingWarehouses: overrides.listSafekeepingWarehouses ?? (async () => []),
+      validateSafekeepingWarehouse: overrides.validateSafekeepingWarehouse ?? (async () => true),
+      listDistributionPlaces: overrides.listDistributionPlaces ?? (async () => []),
+      validateDistributionPlaces: overrides.validateDistributionPlaces ?? (async () => true),
+      listDestinationWarehouses: overrides.listDestinationWarehouses ?? (async () => []),
+      validateDestinationWarehouse: overrides.validateDestinationWarehouse ?? (async () => true),
+      listCities: overrides.listCities ?? (async () => []),
+      validateCity: overrides.validateCity ?? (async () => true),
+      listConapinaReceptionManagers: overrides.listConapinaReceptionManagers ?? (async () => []),
+      findConapinaReceptionManager:
+        overrides.findConapinaReceptionManager ??
+        (async (id) => ({
+          id,
+          nombre: 'María Encargada',
+          cargo: 'Técnica de recepción',
+        })),
       deleteDonation: overrides.deleteDonation ?? (async () => {
         throw new Error('No debe ejecutarse')
       }),
@@ -214,6 +262,25 @@ describe('POST /api/donativos', () => {
     lugar_recepcion: ['catalogo_lugares_recepcion:21'],
     observaciones: '',
     representante_upc: 'catalogo_representantes_upc:4',
+    n_comprobante: 'GF-2026-001',
+    fecha_comprobante: '2026-11-20',
+    almacen_resguardo: 'catalogo_almacenes_resguardo:1',
+    lugar_distribucion: [
+      'catalogo_lugares_distribucion:35',
+      'catalogo_lugares_distribucion:73',
+    ],
+    fechareport_financiero: '2026-11-22',
+    almacen_destino: 'catalogo_almacenes_destino:50',
+    marco_acta: 'Marco institucional',
+    objetivo_acta: 'Documentar la entrega',
+    entregados_acta: 'Bienes detallados',
+    entrega_acta: 'Entrega a la institución',
+    ciudad: 'catalogo_ciudades_departamentos:126',
+    nombre_donante: 'Ana Pérez',
+    cargo_donante: 'Representante',
+    nombre_entidad: 'Entidad donante',
+    dui_donante: '00000000-0',
+    encargado_personal_id: 'Personal:126',
   }
 
   test('requiere una identidad autenticada', async () => {
@@ -253,6 +320,24 @@ describe('POST /api/donativos', () => {
     let receivedCreatedBy = ''
     let receivedRepresentative = ''
     let receivedReceptionPlaces: string[] = []
+    let receivedReceiptNumber = ''
+    let receivedReceiptDate = ''
+    let receivedSafekeepingWarehouse = ''
+    let receivedDistributionPlaces: string[] = []
+    let receivedFinancialReportDate = ''
+    let receivedDestinationWarehouse = ''
+    let receivedRecordFramework = ''
+    let receivedRecordObjective = ''
+    let receivedRecordDelivered = ''
+    let receivedRecordDelivery = ''
+    let receivedCity = ''
+    let receivedDonorName = ''
+    let receivedDonorPosition = ''
+    let receivedDonorEntity = ''
+    let receivedDonorDui = ''
+    let receivedReceptionManagerName = ''
+    let receivedReceptionManagerPosition = ''
+    let receivedReceptionManagerId = ''
     const baseUrl = await startTestServer(
       async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
       {
@@ -261,6 +346,24 @@ describe('POST /api/donativos', () => {
           receivedCreatedBy = createdBy
           receivedRepresentative = input.representante_upc
           receivedReceptionPlaces = input.lugar_recepcion
+          receivedReceiptNumber = input.n_comprobante
+          receivedReceiptDate = input.fecha_comprobante
+          receivedSafekeepingWarehouse = input.almacen_resguardo
+          receivedDistributionPlaces = input.lugar_distribucion
+          receivedFinancialReportDate = input.fechareport_financiero
+          receivedDestinationWarehouse = input.almacen_destino
+          receivedRecordFramework = input.marco_acta
+          receivedRecordObjective = input.objetivo_acta
+          receivedRecordDelivered = input.entregados_acta
+          receivedRecordDelivery = input.entrega_acta
+          receivedCity = input.ciudad
+          receivedDonorName = input.nombre_donante
+          receivedDonorPosition = input.cargo_donante
+          receivedDonorEntity = input.nombre_entidad
+          receivedDonorDui = input.dui_donante
+          receivedReceptionManagerName = input.nombre_encargado
+          receivedReceptionManagerPosition = input.cargo_encargado
+          receivedReceptionManagerId = input.encargado_personal_id
           return {
             id: 'donativos:prueba',
             estado: 'BORRADOR',
@@ -283,6 +386,27 @@ describe('POST /api/donativos', () => {
     assert.equal(receivedCreatedBy, 'usuarios:servidor')
     assert.equal(receivedRepresentative, 'catalogo_representantes_upc:4')
     assert.deepEqual(receivedReceptionPlaces, ['catalogo_lugares_recepcion:21'])
+    assert.equal(receivedReceiptNumber, 'GF-2026-001')
+    assert.equal(receivedReceiptDate, '2026-11-20')
+    assert.equal(receivedSafekeepingWarehouse, 'catalogo_almacenes_resguardo:1')
+    assert.deepEqual(receivedDistributionPlaces, [
+      'catalogo_lugares_distribucion:35',
+      'catalogo_lugares_distribucion:73',
+    ])
+    assert.equal(receivedFinancialReportDate, '2026-11-22')
+    assert.equal(receivedDestinationWarehouse, 'catalogo_almacenes_destino:50')
+    assert.equal(receivedRecordFramework, 'Marco institucional')
+    assert.equal(receivedRecordObjective, 'Documentar la entrega')
+    assert.equal(receivedRecordDelivered, 'Bienes detallados')
+    assert.equal(receivedRecordDelivery, 'Entrega a la institución')
+    assert.equal(receivedCity, 'catalogo_ciudades_departamentos:126')
+    assert.equal(receivedDonorName, 'Ana Pérez')
+    assert.equal(receivedDonorPosition, 'Representante')
+    assert.equal(receivedDonorEntity, 'Entidad donante')
+    assert.equal(receivedDonorDui, '00000000-0')
+    assert.equal(receivedReceptionManagerName, 'María Encargada')
+    assert.equal(receivedReceptionManagerPosition, 'Técnica de recepción')
+    assert.equal(receivedReceptionManagerId, 'Personal:126')
     assert.deepEqual(await response.json(), {
       ok: true,
       donativo: {
@@ -306,6 +430,24 @@ describe('POST /api/donativos', () => {
         Authorization: 'Bearer token-valido',
       },
       body: JSON.stringify({ ...validDonation, acta_conapina: 'archivo.pdf' }),
+    })
+
+    assert.equal(response.status, 400)
+  })
+
+  test('rechaza una fecha de reporte financiero inválida', async () => {
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      { resolveSession: () => 'usuarios:servidor' },
+    )
+
+    const response = await fetch(`${baseUrl}/api/donativos`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-valido',
+      },
+      body: JSON.stringify({ ...validDonation, fechareport_financiero: '2026-02-30' }),
     })
 
     assert.equal(response.status, 400)
@@ -369,6 +511,130 @@ describe('POST /api/donativos', () => {
       'usuarios:4',
     ])
   })
+
+  test('rechaza catálogos inválidos de la Sección 5', async () => {
+    const requests: [Partial<typeof validDonation>, TestServerOverrides][] = [
+      [
+        { almacen_resguardo: 'catalogo_almacenes_resguardo:inactivo' },
+        { validateSafekeepingWarehouse: async () => false },
+      ],
+      [
+        { lugar_distribucion: ['catalogo_lugares_distribucion:inactivo'] },
+        { validateDistributionPlaces: async () => false },
+      ],
+      [
+        { almacen_destino: 'catalogo_almacenes_destino:inactivo' },
+        { validateDestinationWarehouse: async () => false },
+      ],
+    ]
+
+    for (const [values, validators] of requests) {
+      const baseUrl = await startTestServer(
+        async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+        { resolveSession: () => 'usuarios:servidor', ...validators },
+      )
+      const response = await fetch(`${baseUrl}/api/donativos`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token-valido',
+        },
+        body: JSON.stringify({ ...validDonation, ...values }),
+      })
+      assert.equal(response.status, 400)
+    }
+  })
+
+  test('rechaza ciudad inactiva y departamento enviado por el navegador', async () => {
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        validateCity: async () => false,
+      },
+    )
+    const request = (body: unknown) => fetch(`${baseUrl}/api/donativos`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-valido',
+      },
+      body: JSON.stringify(body),
+    })
+
+    assert.equal((await request(validDonation)).status, 400)
+    assert.equal(
+      (await request({ ...validDonation, departamento: 'San Salvador' })).status,
+      400,
+    )
+  })
+
+  test('acepta Sección 8 vacía y rechaza DUI con formato inválido', async () => {
+    let emptySectionReceived = false
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        createDonation: async (_createdBy, input) => {
+          emptySectionReceived =
+            input.nombre_donante === '' &&
+            input.cargo_donante === '' &&
+            input.nombre_entidad === '' &&
+            input.dui_donante === ''
+          return { id: 'donativos:vacio', estado: 'BORRADOR', correlativo_acta: null }
+        },
+      },
+    )
+    const request = (section8: Record<string, string>) => fetch(`${baseUrl}/api/donativos`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-valido',
+      },
+      body: JSON.stringify({ ...validDonation, ...section8 }),
+    })
+
+    const emptyResponse = await request({
+      nombre_donante: '', cargo_donante: '', nombre_entidad: '', dui_donante: '',
+    })
+    const invalidResponse = await request({ dui_donante: '1234567-8' })
+
+    assert.equal(emptyResponse.status, 201)
+    assert.equal(emptySectionReceived, true)
+    assert.equal(invalidResponse.status, 400)
+  })
+
+  test('acepta Sección 9 vacía y rechaza nombre o cargo enviados por el navegador', async () => {
+    let receivedName = 'sin recibir'
+    let receivedPosition = 'sin recibir'
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        createDonation: async (_createdBy, input) => {
+          receivedName = input.nombre_encargado
+          receivedPosition = input.cargo_encargado
+          return { id: 'donativos:seccion9', estado: 'BORRADOR', correlativo_acta: null }
+        },
+      },
+    )
+
+    const emptyResponse = await fetch(`${baseUrl}/api/donativos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token-valido' },
+      body: JSON.stringify({ ...validDonation, encargado_personal_id: '' }),
+    })
+    const untrustedResponse = await fetch(`${baseUrl}/api/donativos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token-valido' },
+      body: JSON.stringify({ ...validDonation, nombre_encargado: 'Nombre falso' }),
+    })
+
+    assert.equal(emptyResponse.status, 201)
+    assert.equal(receivedName, '')
+    assert.equal(receivedPosition, '')
+    assert.equal(untrustedResponse.status, 400)
+  })
 })
 
 describe('GET /api/catalogos/lugares-recepcion', () => {
@@ -430,6 +696,111 @@ describe('GET /api/catalogos/representantes-upc', () => {
     })
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { ok: true, representantes: representatives })
+  })
+})
+
+describe('catálogos de la Sección 5', () => {
+  const items: Section5CatalogItem[] = [
+    { id: 'catalogo_prueba:1', codigo: '001', nombre: 'Opción uno' },
+    { id: 'catalogo_prueba:2', codigo: '002', nombre: 'Opción dos' },
+  ]
+
+  test('devuelve los tres catálogos autenticados', async () => {
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        listSafekeepingWarehouses: async () => items,
+        listDistributionPlaces: async () => items,
+        listDestinationWarehouses: async () => items,
+      },
+    )
+
+    const headers = { Authorization: 'Bearer token-valido' }
+    const safekeeping = await fetch(`${baseUrl}/api/catalogos/almacenes-resguardo`, { headers })
+    const distribution = await fetch(`${baseUrl}/api/catalogos/lugares-distribucion`, { headers })
+    const destination = await fetch(`${baseUrl}/api/catalogos/almacenes-destino`, { headers })
+
+    assert.deepEqual(await safekeeping.json(), { ok: true, almacenes: items })
+    assert.deepEqual(await distribution.json(), { ok: true, lugares: items })
+    assert.deepEqual(await destination.json(), { ok: true, almacenes: items })
+  })
+})
+
+describe('GET /api/catalogos/ciudades', () => {
+  test('requiere sesión y devuelve ciudades activas', async () => {
+    const ciudades: CityCatalogItem[] = [
+      {
+        id: 'catalogo_ciudades_departamentos:126',
+        codigo: '126',
+        ciudad: 'Apopa',
+        departamento: 'San Salvador',
+      },
+    ]
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        listCities: async () => ciudades,
+      },
+    )
+
+    const response = await fetch(`${baseUrl}/api/catalogos/ciudades`, {
+      headers: { Authorization: 'Bearer token-valido' },
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { ok: true, ciudades })
+  })
+})
+
+describe('GET /api/catalogos/encargados-conapina', () => {
+  test('requiere sesión y devuelve únicamente id, nombre y cargo', async () => {
+    const encargados: ConapinaReceptionManager[] = [
+      { id: 'Personal:126', nombre: 'María Encargada', cargo: 'Técnica de recepción' },
+    ]
+    const unauthenticatedUrl = await startTestServer(async () => ({
+      ok: false,
+      reason: 'USER_NOT_FOUND',
+    }))
+    assert.equal(
+      (await fetch(`${unauthenticatedUrl}/api/catalogos/encargados-conapina`)).status,
+      401,
+    )
+
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        listConapinaReceptionManagers: async () => encargados,
+      },
+    )
+    const response = await fetch(`${baseUrl}/api/catalogos/encargados-conapina`, {
+      headers: { Authorization: 'Bearer token-valido' },
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { ok: true, encargados })
+  })
+
+  test('devuelve un error controlado si DBPersonal no está disponible', async () => {
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        listConapinaReceptionManagers: async () => {
+          throw new DatabaseConnectionError()
+        },
+      },
+    )
+    const response = await fetch(`${baseUrl}/api/catalogos/encargados-conapina`, {
+      headers: { Authorization: 'Bearer token-valido' },
+    })
+    const body = await response.json()
+    assert.equal(response.status, 503)
+    assert.deepEqual(body, {
+      ok: false,
+      message: 'No fue posible cargar el catálogo solicitado.',
+    })
+    assert.equal(JSON.stringify(body).includes('stack'), false)
   })
 })
 
@@ -503,6 +874,43 @@ describe('consulta y edición de donativos', () => {
       codigo: '004',
       nombre: 'Representante UPC',
     },
+    n_comprobante: 'GF-2026-001',
+    fecha_comprobante: '2026-11-20T00:00:00.000Z',
+    almacen_resguardo: {
+      id: 'catalogo_almacenes_resguardo:1',
+      codigo: '001',
+      nombre: 'Almacén central',
+    },
+    lugar_distribucion: [
+      {
+        id: 'catalogo_lugares_distribucion:35',
+        codigo: '035',
+        nombre: 'San Salvador',
+      },
+    ],
+    fechareport_financiero: '2026-11-22T00:00:00.000Z',
+    almacen_destino: {
+      id: 'catalogo_almacenes_destino:50',
+      codigo: '050',
+      nombre: 'Almacén regional',
+    },
+    marco_acta: 'Marco institucional',
+    objetivo_acta: 'Documentar la entrega',
+    entregados_acta: 'Bienes detallados',
+    entrega_acta: 'Entrega a la institución',
+    ciudad: {
+      id: 'catalogo_ciudades_departamentos:126',
+      codigo: '126',
+      ciudad: 'Apopa',
+      departamento: 'San Salvador',
+    },
+    nombre_donante: 'Ana Pérez',
+    cargo_donante: 'Representante',
+    nombre_entidad: 'Entidad donante',
+    dui_donante: '00000000-0',
+    encargado_personal_id: 'Personal:126',
+    nombre_encargado: 'María Encargada',
+    cargo_encargado: 'Técnica de recepción',
     created_by: 'usuarios:creador',
     created_by_name: 'Usuario Creador',
     created_at: '2026-11-19T10:00:00.000Z',
@@ -526,12 +934,18 @@ describe('consulta y edición de donativos', () => {
       tipo_documento: 'ACUERDO_DONACION',
       nombre_archivo: 'acuerdo-donacion.pdf',
     }
+    const receipt: DonationDocumentItem = {
+      ...acta,
+      id: 'donativo_documentos:comprobante',
+      tipo_documento: 'COMPROBANTE_GF',
+      nombre_archivo: 'comprobante-gf.pdf',
+    }
     const baseUrl = await startTestServer(
       async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
       {
         resolveSession: () => 'usuarios:servidor',
         getDonation: async () => detail,
-        listDonationDocuments: async () => [acta, agreement],
+        listDonationDocuments: async () => [acta, agreement, receipt],
       },
     )
 
@@ -543,22 +957,175 @@ describe('consulta y edición de donativos', () => {
     assert.deepEqual(await response.json(), {
       ok: true,
       donativo: detail,
-      documentos: [acta, agreement],
+      documentos: [acta, agreement, receipt],
+      acta: null,
     })
+  })
+
+  test('genera un PDF privado y conserva versiones del acta', async () => {
+    const temporaryStorage = await mkdtemp(join(tmpdir(), 'sigedi-acta-'))
+    const records: Array<DonationActaSummary & { ruta: string }> = []
+    const repository: DonationActaRepository = {
+      nextVersion: async () => records.length + 1,
+      createVersion: async (metadata) => {
+        for (const record of records) {
+          if (record.estado === 'ACTIVA') {
+            Object.assign(record, { estado: 'REEMPLAZADA' })
+          }
+        }
+        const created: DonationActaSummary & { ruta: string } = {
+          id: `donativo_actas:${metadata.version}`,
+          version: metadata.version,
+          estado: 'ACTIVA',
+          nombre_archivo: metadata.originalName,
+          ruta: metadata.relativePath,
+        }
+        records.push(created)
+        return created
+      },
+      findActive: async () => records.find((record) => record.estado === 'ACTIVA') ?? null,
+      findActiveFile: async () => {
+        const record = records.find((item) => item.estado === 'ACTIVA')
+        return record
+          ? {
+              nombre_archivo: record.nombre_archivo,
+              ruta_archivo: record.ruta,
+              mime_type: 'application/pdf',
+            }
+          : null
+      },
+    }
+    const service = new DonationActaService(
+      repository,
+      async () => detail,
+      join(temporaryStorage, 'donativos'),
+      temporaryStorage,
+    )
+
+    try {
+      const first = await service.generate('donativos:prueba', 'usuarios:creador')
+      const second = await service.generate('donativos:prueba', 'usuarios:creador')
+      const downloaded = await service.download('donativos:prueba')
+
+      assert.equal(first.version, 1)
+      assert.equal(second.version, 2)
+      assert.equal(records[0]?.estado, 'REEMPLAZADA')
+      assert.equal(records[1]?.estado, 'ACTIVA')
+      assert.match(records[1]?.ruta ?? '', /^donativos\/prueba\/actas\/acta_donacion_v2_[\w-]+\.pdf$/)
+      assert.equal(downloaded.mimeType, 'application/pdf')
+      assert.equal(downloaded.contents.subarray(0, 5).toString(), '%PDF-')
+      assert.ok((await stat(join(temporaryStorage, records[0]?.ruta ?? ''))).isFile())
+      assert.ok((await stat(join(temporaryStorage, records[1]?.ruta ?? ''))).isFile())
+      await assert.rejects(
+        service.generate('usuarios:prueba', 'usuarios:creador'),
+        DonationActaValidationError,
+      )
+    } finally {
+      await rm(temporaryStorage, { recursive: true, force: true })
+    }
+  })
+
+  test('POST crea el acta con la identidad autenticada y GET la entrega inline', async () => {
+    const calls: string[] = []
+    const acta: DonationActaSummary = {
+      id: 'donativo_actas:1',
+      version: 1,
+      estado: 'ACTIVA',
+      nombre_archivo: 'acta_donacion_v1.pdf',
+    }
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:creador',
+        createDonationActa: async (donativoId, createdBy) => {
+          calls.push(donativoId, createdBy)
+          return acta
+        },
+        downloadDonationActa: async (donativoId) => {
+          calls.push(donativoId)
+          return {
+            contents: Buffer.from('%PDF-1.7 acta'),
+            name: acta.nombre_archivo,
+            mimeType: 'application/pdf',
+          }
+        },
+      },
+    )
+
+    const postResponse = await fetch(`${baseUrl}/api/donativos/donativos%3Aprueba/acta`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token-valido' },
+    })
+    const getResponse = await fetch(`${baseUrl}/api/donativos/donativos%3Aprueba/acta`, {
+      headers: { Authorization: 'Bearer token-valido' },
+    })
+
+    assert.equal(postResponse.status, 201)
+    assert.deepEqual(await postResponse.json(), { ok: true, acta })
+    assert.equal(getResponse.status, 200)
+    assert.equal(getResponse.headers.get('content-type'), 'application/pdf')
+    assert.match(getResponse.headers.get('content-disposition') ?? '', /^inline;/)
+    assert.equal(Buffer.from(await getResponse.arrayBuffer()).subarray(0, 5).toString(), '%PDF-')
+    assert.deepEqual(calls, [
+      'donativos:prueba',
+      'usuarios:creador',
+      'donativos:prueba',
+    ])
   })
 
   test('PATCH usa updated_by de la sesión y rechaza campos protegidos', async () => {
     let receivedUpdatedBy = ''
     let receivedRepresentative = ''
     let receivedReceptionPlaces: string[] = []
+    let receivedReceiptNumber = ''
+    let receivedReceiptDate = ''
+    let receivedSafekeepingWarehouse = ''
+    let receivedDistributionPlaces: string[] = []
+    let receivedFinancialReportDate = ''
+    let receivedDestinationWarehouse = ''
+    let receivedRecordFramework = ''
+    let receivedRecordObjective = ''
+    let receivedRecordDelivered = ''
+    let receivedRecordDelivery = ''
+    let receivedCity = ''
+    let receivedDonorName = ''
+    let receivedDonorPosition = ''
+    let receivedDonorEntity = ''
+    let receivedDonorDui = ''
+    let receivedReceptionManagerName = ''
+    let receivedReceptionManagerPosition = ''
+    let receivedReceptionManagerId = ''
     const baseUrl = await startTestServer(
       async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
       {
         resolveSession: () => 'usuarios:servidor',
+        findConapinaReceptionManager: async (id) => ({
+          id,
+          nombre: 'José Encargado',
+          cargo: 'Coordinador de recepción',
+        }),
         updateDonation: async (_id, updatedBy, input) => {
           receivedUpdatedBy = updatedBy
           receivedRepresentative = input.representante_upc
           receivedReceptionPlaces = input.lugar_recepcion
+          receivedReceiptNumber = input.n_comprobante
+          receivedReceiptDate = input.fecha_comprobante
+          receivedSafekeepingWarehouse = input.almacen_resguardo
+          receivedDistributionPlaces = input.lugar_distribucion
+          receivedFinancialReportDate = input.fechareport_financiero
+          receivedDestinationWarehouse = input.almacen_destino
+          receivedRecordFramework = input.marco_acta
+          receivedRecordObjective = input.objetivo_acta
+          receivedRecordDelivered = input.entregados_acta
+          receivedRecordDelivery = input.entrega_acta
+          receivedCity = input.ciudad
+          receivedDonorName = input.nombre_donante
+          receivedDonorPosition = input.cargo_donante
+          receivedDonorEntity = input.nombre_entidad
+          receivedDonorDui = input.dui_donante
+          receivedReceptionManagerName = input.nombre_encargado
+          receivedReceptionManagerPosition = input.cargo_encargado
+          receivedReceptionManagerId = input.encargado_personal_id
           return { ...detail, updated_by: updatedBy }
         },
       },
@@ -572,6 +1139,22 @@ describe('consulta y edición de donativos', () => {
       lugar_recepcion: detail.lugar_recepcion.map((place) => place.id),
       observaciones: '',
       representante_upc: 'catalogo_representantes_upc:5',
+      n_comprobante: 'GF-2026-002',
+      fecha_comprobante: '2026-11-21',
+      almacen_resguardo: 'catalogo_almacenes_resguardo:2',
+      lugar_distribucion: ['catalogo_lugares_distribucion:74'],
+      fechareport_financiero: '2026-11-23',
+      almacen_destino: 'catalogo_almacenes_destino:51',
+      marco_acta: 'Marco actualizado',
+      objetivo_acta: 'Objetivo actualizado',
+      entregados_acta: 'Entregados actualizados',
+      entrega_acta: 'Entrega actualizada',
+      ciudad: 'catalogo_ciudades_departamentos:127',
+      nombre_donante: 'Carlos López',
+      cargo_donante: 'Director',
+      nombre_entidad: 'Entidad actualizada',
+      dui_donante: '01234567-8',
+      encargado_personal_id: 'Personal:127',
     }
     const updated = await fetch(`${baseUrl}/api/donativos/donativos%3Aprueba`, {
       method: 'PATCH',
@@ -594,6 +1177,24 @@ describe('consulta y edición de donativos', () => {
     assert.equal(receivedUpdatedBy, 'usuarios:servidor')
     assert.equal(receivedRepresentative, 'catalogo_representantes_upc:5')
     assert.deepEqual(receivedReceptionPlaces, ['catalogo_lugares_recepcion:21'])
+    assert.equal(receivedReceiptNumber, 'GF-2026-002')
+    assert.equal(receivedReceiptDate, '2026-11-21')
+    assert.equal(receivedSafekeepingWarehouse, 'catalogo_almacenes_resguardo:2')
+    assert.deepEqual(receivedDistributionPlaces, ['catalogo_lugares_distribucion:74'])
+    assert.equal(receivedFinancialReportDate, '2026-11-23')
+    assert.equal(receivedDestinationWarehouse, 'catalogo_almacenes_destino:51')
+    assert.equal(receivedRecordFramework, 'Marco actualizado')
+    assert.equal(receivedRecordObjective, 'Objetivo actualizado')
+    assert.equal(receivedRecordDelivered, 'Entregados actualizados')
+    assert.equal(receivedRecordDelivery, 'Entrega actualizada')
+    assert.equal(receivedCity, 'catalogo_ciudades_departamentos:127')
+    assert.equal(receivedDonorName, 'Carlos López')
+    assert.equal(receivedDonorPosition, 'Director')
+    assert.equal(receivedDonorEntity, 'Entidad actualizada')
+    assert.equal(receivedDonorDui, '01234567-8')
+    assert.equal(receivedReceptionManagerName, 'José Encargado')
+    assert.equal(receivedReceptionManagerPosition, 'Coordinador de recepción')
+    assert.equal(receivedReceptionManagerId, 'Personal:127')
     assert.equal(rejected.status, 400)
   })
 })
@@ -607,6 +1208,20 @@ describe('POST /api/donativos/:id/documentos', () => {
       new File([Buffer.from('%PDF-1.7 prueba')], 'memorandum.pdf', {
         type: 'application/pdf',
       }),
+    )
+    return formData
+  }
+
+  function validImageForm(type: 'REGISTRO_FOTO_1' | 'REGISTRO_FOTO_2'): FormData {
+    const formData = new FormData()
+    formData.set('tipo_documento', type)
+    formData.set(
+      'archivo',
+      new File(
+        [Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])],
+        'fotografia.png',
+        { type: 'image/png' },
+      ),
     )
     return formData
   }
@@ -677,7 +1292,7 @@ describe('POST /api/donativos/:id/documentos', () => {
     assert.equal(response.status, 400)
   })
 
-  test('acepta los tipos de secciones 2 y 3 mediante el contrato documental existente', async () => {
+  test('acepta los tipos de secciones 2, 3 y 4 mediante el contrato documental existente', async () => {
     const receivedTypes: DonationDocumentType[] = []
     const baseUrl = await startTestServer(
       async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
@@ -695,7 +1310,7 @@ describe('POST /api/donativos/:id/documentos', () => {
       },
     )
 
-    for (const type of ['ACTA_CONAPINA', 'ACUERDO_DONACION'] as const) {
+    for (const type of ['ACTA_CONAPINA', 'ACUERDO_DONACION', 'COMPROBANTE_GF'] as const) {
       const response = await fetch(
         `${baseUrl}/api/donativos/donativos%3Aprueba/documentos`,
         {
@@ -707,7 +1322,36 @@ describe('POST /api/donativos/:id/documentos', () => {
 
       assert.equal(response.status, 201)
     }
-    assert.deepEqual(receivedTypes, ['ACTA_CONAPINA', 'ACUERDO_DONACION'])
+    assert.deepEqual(receivedTypes, ['ACTA_CONAPINA', 'ACUERDO_DONACION', 'COMPROBANTE_GF'])
+  })
+
+  test('acepta los dos tipos documentales de registro fotográfico', async () => {
+    const receivedTypes: DonationDocumentType[] = []
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:servidor',
+        createDonationDocument: async (_donativoId, _createdBy, upload) => {
+          receivedTypes.push(upload.tipoDocumento)
+          return {
+            id: `donativo_documentos:${receivedTypes.length}`,
+            tipo_documento: upload.tipoDocumento,
+            nombre_archivo: upload.originalName,
+            estado: 'ACTIVO',
+          }
+        },
+      },
+    )
+
+    for (const type of ['REGISTRO_FOTO_1', 'REGISTRO_FOTO_2'] as const) {
+      const response = await fetch(`${baseUrl}/api/donativos/donativos%3Aprueba/documentos`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token-valido' },
+        body: validImageForm(type),
+      })
+      assert.equal(response.status, 201)
+    }
+    assert.deepEqual(receivedTypes, ['REGISTRO_FOTO_1', 'REGISTRO_FOTO_2'])
   })
 })
 
@@ -922,16 +1566,28 @@ describe('DonationDocumentService', () => {
         },
       )
       assert.match(storedMetadata?.storedName ?? '', /^acuerdo_donacion_[\w-]+\.pdf$/)
+
+      await new DonationDocumentService(repository, temporaryStorage).save(
+        `donativos:${String.fromCodePoint(0x27e8)}4cn2d8afb6mnmtsmhd01${String.fromCodePoint(0x27e9)}`,
+        'usuarios:servidor',
+        {
+          tipoDocumento: 'COMPROBANTE_GF',
+          originalName: 'comprobante-gf.pdf',
+          mimeType: 'application/pdf',
+          contents,
+        },
+      )
+      assert.match(storedMetadata?.storedName ?? '', /^comprobante_gf_[\w-]+\.pdf$/)
     } finally {
       await rm(temporaryStorage, { recursive: true, force: true })
     }
   })
 
-  test('reemplaza ACTA_CONAPINA en el registro activo con updated_by autenticado', async () => {
+  test('reemplaza COMPROBANTE_GF en el registro activo con updated_by autenticado', async () => {
     const temporaryStorage = await mkdtemp(join(tmpdir(), 'sigedi-document-replace-'))
     const donationKey = '4cn2d8afb6mnmtsmhd01'
     const donationId = `donativos:${String.fromCodePoint(0x27e8)}${donationKey}${String.fromCodePoint(0x27e9)}`
-    const previousName = 'acta_conapina_anterior.pdf'
+    const previousName = 'comprobante_gf_anterior.pdf'
     const previousPath = join(temporaryStorage, donationKey, previousName)
     let replacedMetadata: Parameters<DonationDocumentRepository['replace']>[1] | undefined
     let replacedDocumentId = ''
@@ -967,8 +1623,8 @@ describe('DonationDocumentService', () => {
         donationId,
         'usuarios:servidor',
         {
-          tipoDocumento: 'ACTA_CONAPINA',
-          originalName: 'acta-actualizada.pdf',
+          tipoDocumento: 'COMPROBANTE_GF',
+          originalName: 'comprobante-actualizado.pdf',
           mimeType: 'application/pdf',
           contents: Buffer.from('%PDF-1.7 actualizada'),
         },
@@ -977,13 +1633,79 @@ describe('DonationDocumentService', () => {
       assert.equal(result.id, 'donativo_documentos:acta')
       assert.equal(replacedDocumentId, 'donativo_documentos:acta')
       assert.equal(replacedMetadata?.createdBy, 'usuarios:servidor')
-      assert.match(replacedMetadata?.storedName ?? '', /^acta_conapina_[\w-]+\.pdf$/)
+      assert.match(replacedMetadata?.storedName ?? '', /^comprobante_gf_[\w-]+\.pdf$/)
       await assert.rejects(readFile(previousPath))
       assert.deepEqual(
         await readFile(
           join(temporaryStorage, donationKey, replacedMetadata?.storedName ?? ''),
         ),
         Buffer.from('%PDF-1.7 actualizada'),
+      )
+    } finally {
+      await rm(temporaryStorage, { recursive: true, force: true })
+    }
+  })
+
+  test('valida firmas de imágenes, acepta JPG/JPEG/PNG/WebP y rechaza SVG o contenido falso', async () => {
+    const temporaryStorage = await mkdtemp(join(tmpdir(), 'sigedi-photo-'))
+    const storedNames: string[] = []
+    const repository: DonationDocumentRepository = {
+      donationExists: async () => true,
+      findByType: async () => null,
+      create: async (metadata) => {
+        storedNames.push(metadata.storedName)
+        return {
+          id: `donativo_documentos:${storedNames.length}`,
+          tipo_documento: metadata.tipoDocumento,
+          nombre_archivo: metadata.originalName,
+          estado: 'ACTIVO',
+        }
+      },
+      replace: async () => { throw new Error('No debe ejecutarse') },
+      listActive: async () => [],
+      findActiveFile: async () => null,
+      logicalDelete: async () => false,
+    }
+    const service = new DonationDocumentService(repository, temporaryStorage)
+    const donationId = 'donativos:foto_prueba'
+    const samples = [
+      { name: 'foto.jpg', mime: 'image/jpeg', contents: Buffer.from([0xff, 0xd8, 0xff, 0x00]) },
+      { name: 'foto.jpeg', mime: 'image/jpeg', contents: Buffer.from([0xff, 0xd8, 0xff, 0x01]) },
+      { name: 'foto.png', mime: 'image/png', contents: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) },
+      { name: 'foto.webp', mime: 'image/webp', contents: Buffer.from('RIFF0000WEBP') },
+    ]
+
+    try {
+      for (const [index, sample] of samples.entries()) {
+        await service.save(donationId, 'usuarios:servidor', {
+          tipoDocumento: index % 2 === 0 ? 'REGISTRO_FOTO_1' : 'REGISTRO_FOTO_2',
+          originalName: sample.name,
+          mimeType: sample.mime,
+          contents: sample.contents,
+        })
+      }
+      assert.match(storedNames[0] ?? '', /^registro_foto_1_[\w-]+\.jpg$/)
+      assert.match(storedNames[1] ?? '', /^registro_foto_2_[\w-]+\.jpeg$/)
+      assert.match(storedNames[2] ?? '', /^registro_foto_1_[\w-]+\.png$/)
+      assert.match(storedNames[3] ?? '', /^registro_foto_2_[\w-]+\.webp$/)
+
+      await assert.rejects(
+        service.save(donationId, 'usuarios:servidor', {
+          tipoDocumento: 'REGISTRO_FOTO_1',
+          originalName: 'foto.svg',
+          mimeType: 'image/svg+xml',
+          contents: Buffer.from('<svg></svg>'),
+        }),
+        DonationDocumentValidationError,
+      )
+      await assert.rejects(
+        service.save(donationId, 'usuarios:servidor', {
+          tipoDocumento: 'REGISTRO_FOTO_2',
+          originalName: 'foto.png',
+          mimeType: 'image/png',
+          contents: Buffer.from('<svg></svg>'),
+        }),
+        DonationDocumentValidationError,
       )
     } finally {
       await rm(temporaryStorage, { recursive: true, force: true })

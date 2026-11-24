@@ -12,6 +12,25 @@ export type UpcRepresentative = {
   nombre: string
 }
 
+export type Section5CatalogItem = {
+  id: string
+  codigo: string
+  nombre: string
+}
+
+export type CityCatalogItem = {
+  id: string
+  codigo: string
+  ciudad: string
+  departamento: string
+}
+
+export type ConapinaReceptionManager = {
+  id: string
+  nombre: string
+  cargo: string
+}
+
 export type DonationDraftInput = {
   tipo_registro: string
   nombre_proyecto: string
@@ -21,6 +40,22 @@ export type DonationDraftInput = {
   lugar_recepcion: string[]
   observaciones: string
   representante_upc: string
+  n_comprobante: string
+  fecha_comprobante: string
+  almacen_resguardo: string
+  lugar_distribucion: string[]
+  fechareport_financiero: string
+  almacen_destino: string
+  marco_acta: string
+  objetivo_acta: string
+  entregados_acta: string
+  entrega_acta: string
+  ciudad: string
+  nombre_donante: string
+  cargo_donante: string
+  nombre_entidad: string
+  dui_donante: string
+  encargado_personal_id: string
 }
 
 export type CreatedDonation = {
@@ -34,6 +69,9 @@ export type DonationDocumentType =
   | 'MEMO_DE'
   | 'ACTA_CONAPINA'
   | 'ACUERDO_DONACION'
+  | 'COMPROBANTE_GF'
+  | 'REGISTRO_FOTO_1'
+  | 'REGISTRO_FOTO_2'
 
 export type CreatedDonationDocument = {
   id: string
@@ -64,6 +102,24 @@ export type DonationDetail = {
   lugar_recepcion: ReceptionPlace[]
   observaciones: string | null
   representante_upc: UpcRepresentative | null
+  n_comprobante: string | null
+  fecha_comprobante: string | null
+  almacen_resguardo: Section5CatalogItem | null
+  lugar_distribucion: Section5CatalogItem[]
+  fechareport_financiero: string | null
+  almacen_destino: Section5CatalogItem | null
+  marco_acta: string | null
+  objetivo_acta: string | null
+  entregados_acta: string | null
+  entrega_acta: string | null
+  ciudad: CityCatalogItem | null
+  nombre_donante: string | null
+  cargo_donante: string | null
+  nombre_entidad: string | null
+  dui_donante: string | null
+  encargado_personal_id: string | null
+  nombre_encargado: string | null
+  cargo_encargado: string | null
   created_by: string
   created_by_name: string | null
   created_at: string
@@ -74,6 +130,14 @@ export type DonationDetail = {
 export type DonationDetailResult = {
   donativo: DonationDetail
   documentos: DonationDocumentItem[]
+  acta: DonationActaSummary | null
+}
+
+export type DonationActaSummary = {
+  id: string
+  version: number
+  estado: 'ACTIVA'
+  nombre_archivo: string
 }
 
 export type DonationListItem = {
@@ -101,7 +165,16 @@ type DonationDocumentResponse =
   | { ok: false; message: string }
 
 type DonationDetailResponse =
-  | { ok: true; donativo: DonationDetail; documentos: DonationDocumentItem[] }
+  | {
+      ok: true
+      donativo: DonationDetail
+      documentos: DonationDocumentItem[]
+      acta: DonationActaSummary | null
+    }
+  | { ok: false; message: string }
+
+type DonationActaResponse =
+  | { ok: true; acta: DonationActaSummary }
   | { ok: false; message: string }
 
 type DonationUpdateResponse =
@@ -120,13 +193,33 @@ type UpcRepresentativeCatalogResponse =
   | { ok: true; representantes: UpcRepresentative[] }
   | { ok: false; message: string }
 
+type WarehouseCatalogResponse =
+  | { ok: true; almacenes: Section5CatalogItem[] }
+  | { ok: false; message: string }
+
+type DistributionPlaceCatalogResponse =
+  | { ok: true; lugares: Section5CatalogItem[] }
+  | { ok: false; message: string }
+
+type CityCatalogResponse =
+  | { ok: true; ciudades: CityCatalogItem[] }
+  | { ok: false; message: string }
+
+type ConapinaReceptionManagerCatalogResponse =
+  | { ok: true; encargados: ConapinaReceptionManager[] }
+  | { ok: false; message: string }
+
 export class DonationSaveError extends Error {}
 export class DonationListError extends Error {}
 export class DonationDocumentSaveError extends Error {}
 export class DonationDetailError extends Error {}
+export class DonationActaError extends Error {}
 export class DonationDeletionError extends Error {}
 export class ReceptionPlaceCatalogError extends Error {}
 export class UpcRepresentativeCatalogError extends Error {}
+export class Section5CatalogError extends Error {}
+export class CityCatalogError extends Error {}
+export class ConapinaReceptionManagerCatalogError extends Error {}
 
 export async function getReceptionPlaces(authToken: string): Promise<ReceptionPlace[]> {
   const response = await fetch(`${API_BASE_URL}/api/catalogos/lugares-recepcion`, {
@@ -158,6 +251,73 @@ export async function getUpcRepresentatives(
     throw new UpcRepresentativeCatalogError('No fue posible cargar los representantes.')
   }
   return result.representantes
+}
+
+async function getWarehouseCatalog(
+  path: string,
+  authToken: string,
+): Promise<Section5CatalogItem[]> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  }).catch(() => null)
+  if (!response) throw new Section5CatalogError('No fue posible cargar el catálogo.')
+  const result = (await response.json().catch(() => null)) as WarehouseCatalogResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new Section5CatalogError('No fue posible cargar el catálogo.')
+  }
+  return result.almacenes
+}
+
+export function getSafekeepingWarehouses(authToken: string): Promise<Section5CatalogItem[]> {
+  return getWarehouseCatalog('/api/catalogos/almacenes-resguardo', authToken)
+}
+
+export async function getDistributionPlaces(
+  authToken: string,
+): Promise<Section5CatalogItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/catalogos/lugares-distribucion`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  }).catch(() => null)
+  if (!response) throw new Section5CatalogError('No fue posible cargar el catálogo.')
+  const result = (await response.json().catch(() => null)) as DistributionPlaceCatalogResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new Section5CatalogError('No fue posible cargar el catálogo.')
+  }
+  return result.lugares
+}
+
+export function getDestinationWarehouses(authToken: string): Promise<Section5CatalogItem[]> {
+  return getWarehouseCatalog('/api/catalogos/almacenes-destino', authToken)
+}
+
+export async function getCities(authToken: string): Promise<CityCatalogItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/catalogos/ciudades`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  }).catch(() => null)
+  if (!response) throw new CityCatalogError('No fue posible cargar las ciudades.')
+  const result = (await response.json().catch(() => null)) as CityCatalogResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new CityCatalogError('No fue posible cargar las ciudades.')
+  }
+  return result.ciudades
+}
+
+export async function getConapinaReceptionManagers(
+  authToken: string,
+): Promise<ConapinaReceptionManager[]> {
+  const response = await fetch(`${API_BASE_URL}/api/catalogos/encargados-conapina`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  }).catch(() => null)
+  if (!response) {
+    throw new ConapinaReceptionManagerCatalogError('No fue posible cargar los encargados.')
+  }
+  const result = (await response.json().catch(
+    () => null,
+  )) as ConapinaReceptionManagerCatalogResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new ConapinaReceptionManagerCatalogError('No fue posible cargar los encargados.')
+  }
+  return result.encargados
 }
 
 export async function createDonation(
@@ -300,7 +460,38 @@ export async function getDonationDetail(
   if (!response.ok || !result?.ok) {
     throw new DonationDetailError('No fue posible cargar el donativo.')
   }
-  return { donativo: result.donativo, documentos: result.documentos }
+  return { donativo: result.donativo, documentos: result.documentos, acta: result.acta }
+}
+
+export async function createDonationActa(
+  donationId: string,
+  authToken: string,
+): Promise<DonationActaSummary> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/acta`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    },
+  ).catch(() => null)
+  if (!response) throw new DonationActaError('No fue posible generar el acta.')
+  const result = (await response.json().catch(() => null)) as DonationActaResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new DonationActaError('No fue posible generar el acta.')
+  }
+  return result.acta
+}
+
+export async function getDonationActa(
+  donationId: string,
+  authToken: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/acta`,
+    { headers: { Authorization: `Bearer ${authToken}` } },
+  ).catch(() => null)
+  if (!response?.ok) throw new DonationActaError('No fue posible abrir el acta.')
+  return response.blob()
 }
 
 export async function updateDonation(

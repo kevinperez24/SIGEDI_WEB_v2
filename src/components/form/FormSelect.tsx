@@ -1,4 +1,4 @@
-import { KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { ChangeEvent, KeyboardEvent, useEffect, useRef, useState } from 'react'
 import './FormControls.css'
 
 type FormSelectProps = {
@@ -15,6 +15,8 @@ type FormSelectProps = {
   onRetry?: () => void
   ariaInvalid?: boolean
   ariaDescribedBy?: string
+  searchable?: boolean
+  noResultsText?: string
 }
 
 export type FormSelectOption = {
@@ -37,11 +39,15 @@ function FormSelect({
   onRetry,
   ariaInvalid = false,
   ariaDescribedBy,
+  searchable = false,
+  noResultsText = 'Sin coincidencias',
 }: FormSelectProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const typeaheadRef = useRef('')
   const typeaheadTimerRef = useRef<number | undefined>(undefined)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const userClearedSelectionRef = useRef(false)
   const normalizedOptions: FormSelectOption[] = options.map((option) =>
     typeof option === 'string' ? { value: option, label: option } : option,
   )
@@ -50,9 +56,28 @@ function FormSelect({
     ...normalizedOptions,
   ]
   const selectedIndex = optionValues.findIndex((option) => option.value === value)
+  const selectedLabel = normalizedOptions.find((option) => option.value === value)?.label ?? ''
   const [isOpen, setIsOpen] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(Math.max(0, selectedIndex))
+  const [activeIndex, setActiveIndex] = useState(
+    searchable ? 0 : Math.max(0, selectedIndex),
+  )
+  const [searchQuery, setSearchQuery] = useState(
+    selectedLabel,
+  )
   const listboxId = `${id}-listbox`
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase('es-SV')
+  const filteredOptions = normalizedOptions.filter((option) =>
+    option.label.toLocaleLowerCase('es-SV').includes(normalizedSearch),
+  )
+
+  useEffect(() => {
+    if (!searchable) return
+    if (userClearedSelectionRef.current && value === '') {
+      userClearedSelectionRef.current = false
+      return
+    }
+    setSearchQuery(selectedLabel)
+  }, [searchable, value, selectedLabel])
 
   useEffect(() => {
     if (!isOpen) return
@@ -160,6 +185,140 @@ function FormSelect({
           handleTypeahead(event.key)
         }
     }
+  }
+
+  const selectSearchOption = (index: number) => {
+    const option = filteredOptions[index]
+    if (!option) return
+    onChange(option.value)
+    setSearchQuery(option.label)
+    setActiveIndex(index)
+    setIsOpen(false)
+    searchInputRef.current?.focus()
+  }
+
+  const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextQuery = event.target.value
+    setSearchQuery(nextQuery)
+    setActiveIndex(0)
+    setIsOpen(true)
+    if (value) {
+      userClearedSelectionRef.current = true
+      onChange('')
+    }
+  }
+
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (disabled || loading || Boolean(error)) return
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault()
+        if (!isOpen) setIsOpen(true)
+        else if (filteredOptions.length > 0) {
+          setActiveIndex((current) => (current + 1) % filteredOptions.length)
+        }
+        break
+      case 'ArrowUp':
+        event.preventDefault()
+        if (!isOpen) setIsOpen(true)
+        else if (filteredOptions.length > 0) {
+          setActiveIndex(
+            (current) => (current - 1 + filteredOptions.length) % filteredOptions.length,
+          )
+        }
+        break
+      case 'Enter':
+        if (isOpen && filteredOptions.length > 0) {
+          event.preventDefault()
+          selectSearchOption(activeIndex)
+        }
+        break
+      case 'Escape':
+        if (isOpen) {
+          event.preventDefault()
+          event.stopPropagation()
+          setIsOpen(false)
+        }
+        break
+      case 'Tab':
+        setIsOpen(false)
+        break
+    }
+  }
+
+  if (searchable) {
+    return (
+      <div className="form-select" ref={rootRef}>
+        {name && <input type="hidden" name={name} value={value} />}
+        <div className="form-select-search-control" data-open={isOpen || undefined}>
+          <input
+            ref={searchInputRef}
+            id={id}
+            type="text"
+            role="combobox"
+            autoComplete="off"
+            value={loading ? '' : searchQuery}
+            placeholder={loading ? 'Cargando opciones…' : placeholder}
+            aria-controls={listboxId}
+            aria-expanded={isOpen}
+            aria-haspopup="listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              isOpen && filteredOptions[activeIndex]
+                ? `${id}-option-${activeIndex}`
+                : undefined
+            }
+            aria-invalid={ariaInvalid || undefined}
+            aria-describedby={ariaDescribedBy}
+            aria-required={required || undefined}
+            disabled={disabled || loading || Boolean(error)}
+            onChange={handleSearchChange}
+            onFocus={() => setIsOpen(true)}
+            onClick={() => setIsOpen(true)}
+            onKeyDown={handleSearchKeyDown}
+          />
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" />
+          </svg>
+        </div>
+
+        {isOpen && (
+          <ul className="form-select-listbox" id={listboxId} role="listbox">
+            {filteredOptions.length === 0 ? (
+              <li className="form-select-empty" role="presentation">{noResultsText}</li>
+            ) : (
+              filteredOptions.map((option, index) => (
+                <li
+                  id={`${id}-option-${index}`}
+                  className={`${index === activeIndex ? 'is-active' : ''}${
+                    option.value === value ? ' is-selected' : ''
+                  }`}
+                  key={option.value}
+                  role="option"
+                  aria-selected={option.value === value}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectSearchOption(index)}
+                >
+                  <span>{option.label}</span>
+                  {option.value === value && (
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m3 8 3 3 7-7" />
+                    </svg>
+                  )}
+                </li>
+              ))
+            )}
+          </ul>
+        )}
+        {error && (
+          <div className="form-multiselect-status" role="alert">
+            <span>{error}</span>
+            {onRetry && <button type="button" onClick={onRetry}>Reintentar</button>}
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (

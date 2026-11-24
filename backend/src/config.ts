@@ -11,6 +11,11 @@ type EnvironmentKey =
   | 'SURREAL_DATABASE'
   | 'SURREAL_USERNAME'
   | 'SURREAL_PASSWORD'
+  | 'PERSONAL_SURREAL_URL'
+  | 'PERSONAL_SURREAL_NAMESPACE'
+  | 'PERSONAL_SURREAL_DATABASE'
+  | 'PERSONAL_SURREAL_USERNAME'
+  | 'PERSONAL_SURREAL_PASSWORD'
 
 function requireEnvironment(key: EnvironmentKey): string {
   const value = process.env[key]?.trim()
@@ -43,6 +48,13 @@ export type AppConfig = {
     username: string
     password: string
   }
+  personalSurreal: {
+    url: string
+    namespace: string
+    database: string
+    username: string
+    password: string
+  }
 }
 
 let cachedConfig: AppConfig | undefined
@@ -59,6 +71,13 @@ export function getConfig(): AppConfig {
       database: requireEnvironment('SURREAL_DATABASE'),
       username: requireEnvironment('SURREAL_USERNAME'),
       password: requireEnvironment('SURREAL_PASSWORD'),
+    },
+    personalSurreal: {
+      url: requireEnvironment('PERSONAL_SURREAL_URL'),
+      namespace: requireEnvironment('PERSONAL_SURREAL_NAMESPACE'),
+      database: requireEnvironment('PERSONAL_SURREAL_DATABASE'),
+      username: requireEnvironment('PERSONAL_SURREAL_USERNAME'),
+      password: requireEnvironment('PERSONAL_SURREAL_PASSWORD'),
     },
   }
 

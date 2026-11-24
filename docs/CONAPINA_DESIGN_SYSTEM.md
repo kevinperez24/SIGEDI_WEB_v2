@@ -65,6 +65,19 @@ La implementación inicial aplica estos criterios únicamente al Login. Los toke
 - El shell autenticado utiliza un encabezado horizontal persistente de 58 px con `--conapina-shell-dark`, marca e identidad real de la sesión. Sus bordes exteriores permanecen rectos.
 - Los módulos reutilizan un único Hero compacto con el gradiente institucional, radio de 16–20 px y decoración circular discreta. Solo cambian la etiqueta, el título y la descripción de cada módulo.
 - Los KPI procedentes de servicios deben distinguir carga, error y cero válido. Nunca se presenta `0` como sustituto de una consulta fallida.
+- El cambio entre módulos anima una sola vez el panel completo durante 200 ms, con opacidad y desplazamiento vertical de 6 px; el shell y el sidebar permanecen estáticos y `prefers-reduced-motion` desactiva el efecto.
+
+### Donativos Monetarios (DON-MON-01)
+
+- El módulo utiliza la ruta frontend `/donativos-monetarios` dentro del shell autenticado y reutiliza el Hero, las tarjetas KPI y el panel de listado existentes.
+- El formulario inicial utiliza `/donativos-monetarios/registro`, conserva el shell y presenta una pestaña tipo carpeta para la Sección 1 con Tipo de gestión y Nombre del proyecto.
+- La Sección 2, “Detalle de Recibo de Donación Monetaria”, incorpora lugar, hora y fecha de entrega, monto USD, centro de destino y objetivo; las pestañas conservan temporalmente el estado al navegar con Anterior y Siguiente.
+- La Sección 3, “Información del Donante”, incorpora nombre, cargo, DUI con formato local `00000000-0`, entidad, medio de entrega y propósito; sus campos son opcionales y comparten el estado temporal de las secciones anteriores.
+- La Sección 4, “Información de Recepción de Donación”, reutiliza los catálogos autenticados de Representantes UPC y Encargados de Recepción; muestra nombres completos y conserva sus identificadores únicamente en el estado temporal del formulario.
+- La Sección 5, “Detalle de Acta de Recepción de Donación”, incorpora marco, entidad, objetivo, entrega, distribución, fecha del acuerdo y una ciudad obtenida del catálogo autenticado existente; todos los valores permanecen en estado frontend.
+- La Sección 6, “Registro Fotográfico”, conserva localmente hasta dos imágenes JPG, JPEG o PNG de máximo 10 MB, con vista previa, reemplazo y eliminación; no realiza cargas ni simula persistencia.
+- Mientras no exista integración, los indicadores muestran `—` y “Sin datos disponibles”; el formulario conserva valores solo en el estado frontend y no ofrece guardado ni simula registros.
+- La entrada al shell autenticado usa una transición de 200 ms con opacidad y desplazamiento vertical mínimo, desactivada mediante `prefers-reduced-motion`.
 
 ## Controles de formulario (UI-04)
 
@@ -72,3 +85,14 @@ La implementación inicial aplica estos criterios únicamente al Login. Los toke
 - `FormMultiSelect` extiende el patrón listbox para catálogos de selección múltiple y representa los valores elegidos como chips removibles; debe recibir sus opciones desde servicios, no desde catálogos hardcodeados.
 - `DatePicker` presenta un calendario institucional accesible y conserva externamente fechas con formato `YYYY-MM-DD`. Soporta navegación por flechas, Home/End, PageUp/PageDown, selección con Enter/Espacio y cierre con Escape.
 - Ambos controles usan los tokens de borde, foco, navy, azul y superficies suaves; mantienen foco visible, estados deshabilitados y reducción de movimiento.
+
+## Flujos de donativos (DON-UI-09)
+
+- Registro usa `/donaciones/registro` y Consulta/Edición usa `/donaciones/detalle?id=<record-id>` dentro del shell autenticado. Los formularios principales dejaron de utilizar overlays modales.
+- Ambas páginas comparten un índice derecho con las 10 secciones oficiales, de la 1 a la 10.
+- La Sección 6, “Almacenes y Productos”, mantiene en memoria una relación frontend de múltiples almacenes y productos independientes. Reutiliza el catálogo autenticado de almacenes; el proveedor permanece deshabilitado con estado informativo hasta que exista un catálogo. Sus datos no forman parte de los payloads POST/PATCH actuales.
+- Cada producto conserva marca, producto filtrable, cantidad, precio unitario y total calculado. Mientras no existan catálogos de marcas y productos, sus selectores muestran estados vacíos informativos sin datos ficticios.
+- En escritorio el índice ocupa entre 220 y 250 px y permanece sticky. En laptop y móvil se convierte en un selector accesible sobre el formulario.
+- El índice muestra progreso, sección activa y errores de validación confirmados. Cambiar de sección conserva estado, catálogos y archivos seleccionados.
+- Registro conserva creación y carga documental; tras un guardado completo actualiza el listado y vuelve a Donativos. Consulta conserva lectura, edición, cancelación sin PATCH, documentos y generación de actas.
+- Los diálogos auxiliares de confirmación y los visores autenticados de documentos permanecen disponibles cuando la acción los requiere.

@@ -3,6 +3,9 @@ export type DonationDocumentType =
   | 'MEMO_DE'
   | 'ACTA_CONAPINA'
   | 'ACUERDO_DONACION'
+  | 'COMPROBANTE_GF'
+  | 'REGISTRO_FOTO_1'
+  | 'REGISTRO_FOTO_2'
 
 export type DonationDocumentUpload = {
   tipoDocumento: DonationDocumentType

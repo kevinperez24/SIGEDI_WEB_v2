@@ -1,9 +1,22 @@
 .dashboard-shell {
   min-height: 100vh;
   min-height: 100dvh;
+  animation: dashboard-enter 200ms ease-out both;
   background:
     radial-gradient(circle at 100% 0%, rgba(18, 133, 177, 0.08), transparent 28%),
     #f3f7f9;
+}
+
+@keyframes dashboard-enter {
+  from {
+    opacity: 0.96;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .dashboard-header {
@@ -226,12 +239,14 @@
   font-weight: 700;
   text-decoration: none;
   transition:
+    transform 170ms ease-out,
     border-color 180ms ease,
     background 180ms ease,
     box-shadow 180ms ease;
 }
 
 .nav-item:hover:not(.nav-item--active) {
+  transform: translateY(-1px);
   border-color: rgba(8, 124, 173, 0.18);
   background: #fafdfe;
 }
@@ -255,6 +270,11 @@
   background: #e5f7f2;
 }
 
+.nav-icon--monetary {
+  color: var(--conapina-blue-secondary);
+  background: var(--conapina-blue-soft-2);
+}
+
 .nav-icon svg {
   width: 17px;
   fill: none;
@@ -274,6 +294,22 @@
 .dashboard-main {
   width: min(100%, 1240px);
   padding: 26px clamp(20px, 4vw, 48px) 64px;
+}
+
+.dashboard-view {
+  animation: dashboard-view-enter 200ms ease-out both;
+}
+
+@keyframes dashboard-view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .workspace-hero {
@@ -391,6 +427,14 @@
   fill: currentColor;
 }
 
+.module-icon--monetary svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
 .module-card h2,
 .module-card p {
   margin: 0;
@@ -411,9 +455,15 @@
     background 160ms ease;
 }
 
-.primary-action-button:hover {
+.primary-action-button:hover:not(:disabled) {
   transform: translateY(-1px);
   background: #006b96;
+}
+
+.primary-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+  box-shadow: none;
 }
 
 .primary-action-button:focus-visible {
@@ -430,6 +480,19 @@
   margin-top: 5px;
   color: #637b86;
   font-size: 0.9rem;
+}
+
+.pending-action {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: 7px;
+}
+
+.pending-action p {
+  margin: 0;
+  color: var(--conapina-text-secondary);
+  font-size: 0.7rem;
 }
 
 .information-section {
@@ -502,6 +565,13 @@
 
 .information-card .information-value--success {
   color: var(--conapina-success);
+}
+
+.information-note {
+  display: block;
+  margin-top: 5px;
+  color: var(--conapina-text-secondary);
+  font-size: 0.72rem;
 }
 
 .donations-list {
@@ -935,6 +1005,7 @@
 
   .dashboard-sidebar nav {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
 
@@ -949,8 +1020,8 @@
 
   .nav-item {
     width: auto;
-    max-width: 180px;
-    flex: 1 1 0;
+    max-width: none;
+    flex: 1 1 180px;
     min-height: 40px;
   }
 
@@ -1028,6 +1099,15 @@
     flex-direction: column;
   }
 
+  .pending-action {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .pending-action p {
+    text-align: center;
+  }
+
   .primary-action-button {
     width: 100%;
   }
@@ -1044,6 +1124,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .dashboard-shell,
+  .dashboard-view {
+    animation: none;
+  }
+
   .logout-button,
   .nav-item,
   .primary-action-button {

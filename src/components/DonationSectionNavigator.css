@@ -1,0 +1,167 @@
+.donation-section-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(220px, 250px);
+  gap: 22px;
+  align-items: start;
+}
+
+.donation-section-main {
+  min-width: 0;
+}
+
+.donation-section-navigator {
+  position: sticky;
+  top: 76px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--conapina-border);
+  border-radius: 13px;
+  background: var(--conapina-white);
+  box-shadow: 0 10px 24px rgba(7, 59, 87, 0.07);
+}
+
+.donation-section-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px 12px;
+  color: var(--conapina-text-secondary);
+  font-size: 0.72rem;
+}
+
+.donation-section-progress strong {
+  color: var(--conapina-navy);
+}
+
+.donation-section-progress > div {
+  grid-column: 1 / -1;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--conapina-blue-soft);
+}
+
+.donation-section-progress > div span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--conapina-blue-secondary);
+  transition: width 180ms ease-out;
+}
+
+.donation-section-index {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+}
+
+.donation-section-index button {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  min-height: 46px;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--conapina-text-secondary);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  transition: border-color 170ms ease-out, background 170ms ease-out, transform 170ms ease-out;
+}
+
+.donation-section-index button:hover {
+  border-color: var(--conapina-border);
+  background: var(--conapina-background);
+  transform: translateX(2px);
+}
+
+.donation-section-index button.is-active {
+  border-color: rgba(8, 124, 173, 0.35);
+  color: var(--conapina-navy);
+  background: var(--conapina-blue-soft);
+}
+
+.donation-section-index button.is-invalid {
+  border-color: rgba(189, 60, 69, 0.32);
+}
+
+.donation-section-index button > span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--conapina-blue-secondary);
+  background: var(--conapina-blue-soft);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.donation-section-index button.is-active > span {
+  color: var(--conapina-white);
+  background: var(--conapina-blue-secondary);
+}
+
+.donation-section-index button strong {
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.donation-section-index button small {
+  color: var(--conapina-error);
+  font-size: 0.62rem;
+  font-weight: 750;
+}
+
+.donation-section-compact {
+  display: none;
+}
+
+.donation-section-index button:focus-visible,
+.donation-section-compact select:focus-visible {
+  outline: 3px solid rgba(21, 145, 191, 0.24);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1100px) {
+  .donation-section-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .donation-section-navigator {
+    position: static;
+    order: -1;
+  }
+
+  .donation-section-index {
+    display: none;
+  }
+
+  .donation-section-compact {
+    display: grid;
+    gap: 7px;
+    margin-top: 13px;
+    color: var(--conapina-text);
+    font-size: 0.76rem;
+    font-weight: 750;
+  }
+
+  .donation-section-compact select {
+    width: 100%;
+    min-height: 44px;
+    padding: 0 38px 0 12px;
+    border: 1px solid var(--conapina-border);
+    border-radius: 9px;
+    color: var(--conapina-text);
+    background: var(--conapina-white);
+    font: inherit;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .donation-section-progress > div span,
+  .donation-section-index button {
+    transition-duration: 0.01ms;
+  }
+}

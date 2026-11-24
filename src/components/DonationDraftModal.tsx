@@ -1,6 +1,5 @@
 import {
   FormEvent,
-  KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
   useRef,
@@ -8,19 +7,35 @@ import {
 } from 'react'
 import {
   createDonation,
+  getCities,
+  getConapinaReceptionManagers,
   DonationSaveError,
+  getDestinationWarehouses,
+  getDistributionPlaces,
   getReceptionPlaces,
+  getSafekeepingWarehouses,
   getUpcRepresentatives,
   uploadDonationDocument,
 } from '../services/donations'
 import type {
   DonationDocumentType,
+  CityCatalogItem,
+  ConapinaReceptionManager,
   ReceptionPlace,
+  Section5CatalogItem,
   UpcRepresentative,
 } from '../services/donations'
 import DatePicker from './form/DatePicker'
 import FormMultiSelect from './form/FormMultiSelect'
 import FormSelect from './form/FormSelect'
+import DonationSectionNavigator, {
+  donationSections,
+  type DonationSectionNumber,
+} from './DonationSectionNavigator'
+import DonationWarehousesSection, {
+  type DonationWarehouseDraft,
+} from './DonationWarehousesSection'
+import '../pages/DonativoMonetarioForm.css'
 import './DonationDraftModal.css'
 
 type DonationDraftModalProps = {
@@ -39,6 +54,22 @@ type DonationForm = {
   lugarRecepcion: string[]
   observaciones: string
   representanteUpc: string
+  numeroComprobante: string
+  fechaComprobante: string
+  almacenResguardo: string
+  lugarDistribucion: string[]
+  fechaReporteFinanciero: string
+  almacenDestino: string
+  marcoActa: string
+  objetivoActa: string
+  entregadosActa: string
+  entregaActa: string
+  ciudad: string
+  nombreDonante: string
+  cargoDonante: string
+  nombreEntidad: string
+  duiDonante: string
+  encargadoPersonalId: string
 }
 
 type RequiredField =
@@ -47,25 +78,39 @@ type RequiredField =
   | 'tipoGestion'
   | 'fechaRecepcion'
   | 'lugarRecepcion'
+  | 'duiDonante'
 
 type FormErrors = Partial<Record<RequiredField, string>>
-type StringFormField = Exclude<keyof DonationForm, 'lugarRecepcion'>
+type StringFormField = Exclude<keyof DonationForm, 'lugarRecepcion' | 'lugarDistribucion'>
 
 type AttachmentField =
   | 'initialRecord'
   | 'executiveAuthorization'
   | 'conapinaRecord'
   | 'donationAgreement'
+  | 'financialReceipt'
+  | 'photo1'
+  | 'photo2'
 type Attachments = Record<AttachmentField, File | null>
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const allowedAttachmentExtensions = new Set(['.pdf', '.doc', '.docx'])
+const allowedImageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp'])
+const DUI_PATTERN = /^\d{8}-\d$/
+
+function formatDui(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 9)
+  return digits.length > 8 ? `${digits.slice(0, 8)}-${digits.slice(8)}` : digits
+}
 
 const attachmentDocumentTypes: Record<AttachmentField, DonationDocumentType> = {
   initialRecord: 'MEMO_INICIAL',
   executiveAuthorization: 'MEMO_DE',
   conapinaRecord: 'ACTA_CONAPINA',
   donationAgreement: 'ACUERDO_DONACION',
+  financialReceipt: 'COMPROBANTE_GF',
+  photo1: 'REGISTRO_FOTO_1',
+  photo2: 'REGISTRO_FOTO_2',
 }
 
 const initialAttachments: Attachments = {
@@ -73,6 +118,26 @@ const initialAttachments: Attachments = {
   executiveAuthorization: null,
   conapinaRecord: null,
   donationAgreement: null,
+  financialReceipt: null,
+  photo1: null,
+  photo2: null,
+}
+
+const photoAttachmentSlots: { field: 'photo1' | 'photo2'; title: string }[] = [
+  { field: 'photo1', title: 'Fotografía 1' },
+  { field: 'photo2', title: 'Fotografía 2' },
+]
+
+function LocalImagePreview({ file }: { file: File }) {
+  const [previewUrl, setPreviewUrl] = useState('')
+
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file)
+    setPreviewUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [file])
+
+  return previewUrl ? <img className="photo-preview" src={previewUrl} alt={`Vista previa de ${file.name}`} /> : null
 }
 
 function formatFileSize(sizeBytes: number): string {
@@ -95,6 +160,22 @@ const initialForm: DonationForm = {
   lugarRecepcion: [],
   observaciones: '',
   representanteUpc: '',
+  numeroComprobante: '',
+  fechaComprobante: '',
+  almacenResguardo: '',
+  lugarDistribucion: [],
+  fechaReporteFinanciero: '',
+  almacenDestino: '',
+  marcoActa: '',
+  objetivoActa: '',
+  entregadosActa: '',
+  entregaActa: '',
+  ciudad: '',
+  nombreDonante: '',
+  cargoDonante: '',
+  nombreEntidad: '',
+  duiDonante: '',
+  encargadoPersonalId: '',
 }
 
 function DonationDraftModal({
@@ -103,15 +184,14 @@ function DonationDraftModal({
   onClose,
   onSaved,
 }: DonationDraftModalProps) {
-  const dialogRef = useRef<HTMLDivElement>(null)
-  const firstFieldRef = useRef<HTMLInputElement>(null)
   const operationLockedRef = useRef(false)
+  const [activeSection, setActiveSection] = useState<DonationSectionNumber>(1)
+  const [warehouseGroups, setWarehouseGroups] = useState<DonationWarehouseDraft[]>([])
   const [form, setForm] = useState(initialForm)
   const [errors, setErrors] = useState<FormErrors>({})
   const [statusMessage, setStatusMessage] = useState('')
   const [statusType, setStatusType] = useState<'success' | 'error' | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [isClosing, setIsClosing] = useState(false)
   const [createdDonationId, setCreatedDonationId] = useState<string | null>(null)
   const [attachments, setAttachments] = useState<Attachments>(initialAttachments)
   const [attachmentErrors, setAttachmentErrors] = useState<
@@ -123,6 +203,21 @@ function DonationDraftModal({
   const [upcRepresentatives, setUpcRepresentatives] = useState<UpcRepresentative[]>([])
   const [isUpcRepresentativesLoading, setIsUpcRepresentativesLoading] = useState(true)
   const [upcRepresentativesError, setUpcRepresentativesError] = useState('')
+  const [safekeepingWarehouses, setSafekeepingWarehouses] = useState<Section5CatalogItem[]>([])
+  const [isSafekeepingWarehousesLoading, setIsSafekeepingWarehousesLoading] = useState(true)
+  const [safekeepingWarehousesError, setSafekeepingWarehousesError] = useState('')
+  const [distributionPlaces, setDistributionPlaces] = useState<Section5CatalogItem[]>([])
+  const [isDistributionPlacesLoading, setIsDistributionPlacesLoading] = useState(true)
+  const [distributionPlacesError, setDistributionPlacesError] = useState('')
+  const [destinationWarehouses, setDestinationWarehouses] = useState<Section5CatalogItem[]>([])
+  const [isDestinationWarehousesLoading, setIsDestinationWarehousesLoading] = useState(true)
+  const [destinationWarehousesError, setDestinationWarehousesError] = useState('')
+  const [cities, setCities] = useState<CityCatalogItem[]>([])
+  const [isCitiesLoading, setIsCitiesLoading] = useState(true)
+  const [citiesError, setCitiesError] = useState('')
+  const [receptionManagers, setReceptionManagers] = useState<ConapinaReceptionManager[]>([])
+  const [isReceptionManagersLoading, setIsReceptionManagersLoading] = useState(true)
+  const [receptionManagersError, setReceptionManagersError] = useState('')
 
   const loadReceptionPlaces = useCallback(async () => {
     setIsReceptionPlacesLoading(true)
@@ -156,48 +251,77 @@ function DonationDraftModal({
     void loadUpcRepresentatives()
   }, [loadUpcRepresentatives])
 
-  useEffect(() => {
-    const previousActiveElement = document.activeElement as HTMLElement | null
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    firstFieldRef.current?.focus()
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !operationLockedRef.current) {
-        event.preventDefault()
-        onClose()
-      }
+  const loadSafekeepingWarehouses = useCallback(async () => {
+    setIsSafekeepingWarehousesLoading(true)
+    setSafekeepingWarehousesError('')
+    try {
+      setSafekeepingWarehouses(await getSafekeepingWarehouses(authToken))
+    } catch {
+      setSafekeepingWarehousesError('No fue posible cargar los almacenes de resguardo.')
+    } finally {
+      setIsSafekeepingWarehousesLoading(false)
     }
+  }, [authToken])
 
-    document.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = previousOverflow
-      previousActiveElement?.focus()
+  const loadDistributionPlaces = useCallback(async () => {
+    setIsDistributionPlacesLoading(true)
+    setDistributionPlacesError('')
+    try {
+      setDistributionPlaces(await getDistributionPlaces(authToken))
+    } catch {
+      setDistributionPlacesError('No fue posible cargar los lugares de distribución.')
+    } finally {
+      setIsDistributionPlacesLoading(false)
     }
-  }, [onClose])
+  }, [authToken])
 
-  const handleFocusTrap = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Tab') return
-
-    const focusableElements = dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-    )
-
-    if (!focusableElements?.length) return
-
-    const firstElement = focusableElements[0]
-    const lastElement = focusableElements[focusableElements.length - 1]
-
-    if (event.shiftKey && document.activeElement === firstElement) {
-      event.preventDefault()
-      lastElement.focus()
-    } else if (!event.shiftKey && document.activeElement === lastElement) {
-      event.preventDefault()
-      firstElement.focus()
+  const loadDestinationWarehouses = useCallback(async () => {
+    setIsDestinationWarehousesLoading(true)
+    setDestinationWarehousesError('')
+    try {
+      setDestinationWarehouses(await getDestinationWarehouses(authToken))
+    } catch {
+      setDestinationWarehousesError('No fue posible cargar los almacenes destino.')
+    } finally {
+      setIsDestinationWarehousesLoading(false)
     }
-  }
+  }, [authToken])
+
+  useEffect(() => { void loadSafekeepingWarehouses() }, [loadSafekeepingWarehouses])
+  useEffect(() => { void loadDistributionPlaces() }, [loadDistributionPlaces])
+  useEffect(() => { void loadDestinationWarehouses() }, [loadDestinationWarehouses])
+
+  const loadCities = useCallback(async () => {
+    setIsCitiesLoading(true)
+    setCitiesError('')
+    try {
+      setCities(await getCities(authToken))
+    } catch {
+      setCitiesError('No fue posible cargar las ciudades.')
+    } finally {
+      setIsCitiesLoading(false)
+    }
+  }, [authToken])
+
+  useEffect(() => { void loadCities() }, [loadCities])
+
+  const loadReceptionManagers = useCallback(async () => {
+    setIsReceptionManagersLoading(true)
+    setReceptionManagersError('')
+    try {
+      setReceptionManagers(await getConapinaReceptionManagers(authToken))
+    } catch {
+      setReceptionManagersError('No fue posible cargar el personal de CONAPINA.')
+    } finally {
+      setIsReceptionManagersLoading(false)
+    }
+  }, [authToken])
+
+  useEffect(() => { void loadReceptionManagers() }, [loadReceptionManagers])
+
+  const selectedReceptionManager = receptionManagers.find(
+    (manager) => manager.id === form.encargadoPersonalId,
+  )
 
   const updateField = (field: StringFormField, value: string) => {
     setForm((current) => ({ ...current, [field]: value }))
@@ -213,6 +337,9 @@ function DonationDraftModal({
     ) {
       setErrors((current) => ({ ...current, [field]: undefined }))
     }
+    if (field === 'duiDonante' && (!value || DUI_PATTERN.test(value))) {
+      setErrors((current) => ({ ...current, duiDonante: undefined }))
+    }
   }
 
   const updateReceptionPlaces = (values: string[]) => {
@@ -222,6 +349,12 @@ function DonationDraftModal({
     if (values.length > 0) {
       setErrors((current) => ({ ...current, lugarRecepcion: undefined }))
     }
+  }
+
+  const updateDistributionPlaces = (values: string[]) => {
+    setForm((current) => ({ ...current, lugarDistribucion: values }))
+    setStatusMessage('')
+    setStatusType(null)
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -250,15 +383,35 @@ function DonationDraftModal({
       nextErrors.lugarRecepcion = 'Debe seleccionar al menos un lugar de recepción.'
     }
 
+    if (form.duiDonante && !DUI_PATTERN.test(form.duiDonante)) {
+      nextErrors.duiDonante = 'Ingrese el DUI con formato 00000000-0.'
+    }
+
     setErrors(nextErrors)
 
     if (Object.keys(nextErrors).length > 0) {
+      setActiveSection(
+        Object.keys(nextErrors).some((field) => field !== 'duiDonante') ? 1 : 8,
+      )
       setStatusMessage('Revise los campos requeridos antes de continuar.')
       setStatusType('error')
       return
     }
 
     if (Object.values(attachmentErrors).some(Boolean)) {
+      const firstInvalidAttachment = (
+        Object.entries(attachmentErrors) as [AttachmentField, string | undefined][]
+      ).find(([, message]) => Boolean(message))?.[0]
+      const attachmentSection: Partial<Record<AttachmentField, DonationSectionNumber>> = {
+        initialRecord: 1,
+        executiveAuthorization: 1,
+        conapinaRecord: 2,
+        donationAgreement: 3,
+        financialReceipt: 4,
+        photo1: 10,
+        photo2: 10,
+      }
+      if (firstInvalidAttachment) setActiveSection(attachmentSection[firstInvalidAttachment] ?? 1)
       setStatusMessage('Revise los documentos seleccionados antes de continuar.')
       setStatusType('error')
       return
@@ -283,6 +436,22 @@ function DonationDraftModal({
             lugar_recepcion: form.lugarRecepcion,
             observaciones: form.observaciones.trim(),
             representante_upc: form.representanteUpc.trim(),
+            n_comprobante: form.numeroComprobante.trim(),
+            fecha_comprobante: form.fechaComprobante,
+            almacen_resguardo: form.almacenResguardo.trim(),
+            lugar_distribucion: form.lugarDistribucion,
+            fechareport_financiero: form.fechaReporteFinanciero,
+            almacen_destino: form.almacenDestino.trim(),
+            marco_acta: form.marcoActa.trim(),
+            objetivo_acta: form.objetivoActa.trim(),
+            entregados_acta: form.entregadosActa.trim(),
+            entrega_acta: form.entregaActa.trim(),
+            ciudad: form.ciudad.trim(),
+            nombre_donante: form.nombreDonante.trim(),
+            cargo_donante: form.cargoDonante.trim(),
+            nombre_entidad: form.nombreEntidad.trim(),
+            dui_donante: form.duiDonante,
+            encargado_personal_id: form.encargadoPersonalId,
           },
           authToken,
         )
@@ -326,11 +495,6 @@ function DonationDraftModal({
       )
       setStatusType('success')
       await onSaved()
-      setIsClosing(true)
-      const closingDelay = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        ? 0
-        : 180
-      await new Promise((resolve) => window.setTimeout(resolve, closingDelay))
       onClose()
     } catch (error) {
       setStatusMessage(
@@ -354,8 +518,13 @@ function DonationDraftModal({
     let errorMessage = ''
     let failedValidation = ''
 
-    if (!allowedAttachmentExtensions.has(actualExtension)) {
-      errorMessage = 'Seleccione un archivo PDF, DOC o DOCX válido.'
+    const isPhoto = field === 'photo1' || field === 'photo2'
+    const allowedExtensions = isPhoto ? allowedImageExtensions : allowedAttachmentExtensions
+
+    if (!allowedExtensions.has(actualExtension)) {
+      errorMessage = isPhoto
+        ? 'Seleccione una imagen JPG, JPEG, PNG o WebP válida.'
+        : 'Seleccione un archivo PDF, DOC o DOCX válido.'
       failedValidation = 'extension'
     } else if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) {
       errorMessage = 'El archivo debe tener un tamaño máximo de 10 MB.'
@@ -399,44 +568,55 @@ function DonationDraftModal({
     attachments.initialRecord,
     attachments.executiveAuthorization,
   ].filter(Boolean).length
+  const selectedCity = cities.find((item) => item.id === form.ciudad)
+  const activeSectionIndex = donationSections.findIndex(
+    (section) => section.number === activeSection,
+  )
+  const hasPreviousSection = activeSectionIndex > 0
+  const hasNextSection = activeSectionIndex < donationSections.length - 1
+
+  const goToPreviousSection = () => {
+    const previousSection = donationSections[activeSectionIndex - 1]
+    if (previousSection) setActiveSection(previousSection.number)
+  }
+
+  const goToNextSection = () => {
+    const nextSection = donationSections[activeSectionIndex + 1]
+    if (nextSection) setActiveSection(nextSection.number)
+  }
+
+  const invalidSections = new Set<DonationSectionNumber>()
+  if (
+    errors.tipoRegistro ||
+    errors.nombreDonativo ||
+    errors.tipoGestion ||
+    errors.fechaRecepcion ||
+    errors.lugarRecepcion ||
+    attachmentErrors.initialRecord ||
+    attachmentErrors.executiveAuthorization
+  ) invalidSections.add(1)
+  if (attachmentErrors.conapinaRecord) invalidSections.add(2)
+  if (attachmentErrors.donationAgreement) invalidSections.add(3)
+  if (attachmentErrors.financialReceipt) invalidSections.add(4)
+  if (errors.duiDonante) invalidSections.add(8)
+  if (attachmentErrors.photo1 || attachmentErrors.photo2) invalidSections.add(10)
 
   return (
-    <div
-      className={`donation-modal-overlay${
-        isClosing ? ' donation-modal-overlay--closing' : ''
-      }`}
-      role="presentation"
+    <main
+      className="dashboard-main dashboard-view donation-registration-page"
+      id="registro-donacion"
+      key="registro-donacion"
     >
-      <div
-        className={`donation-modal${isClosing ? ' donation-modal--closing' : ''}`}
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="donation-modal-title"
-        aria-describedby="donation-modal-description"
-        onKeyDown={handleFocusTrap}
-      >
-        <header className="donation-modal-header">
-          <div>
-            <h2 id="donation-modal-title">Registrar nueva donación</h2>
-            <p id="donation-modal-description">
-              Sistema de Gestión de Donaciones Institucionales — CONAPINA
-            </p>
-          </div>
-          <button
-            className="donation-modal-close"
-            type="button"
-            onClick={onClose}
-            disabled={isSaving}
-            aria-label="Cerrar formulario de donación"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z" />
-            </svg>
-          </button>
-        </header>
+      <header className="monetary-registration-heading">
+        <p>DONATIVOS INSTITUCIONALES</p>
+        <h1>Registrar nueva donación</h1>
+        <span>Sistema de Gestión de Donaciones Institucionales — CONAPINA</span>
+      </header>
 
-        <form className="donation-modal-form" onSubmit={handleSubmit} noValidate>
+      <form className="donation-registration-folder" onSubmit={handleSubmit} noValidate>
+        <div className="donation-section-layout">
+          <div className="donation-section-main">
+            <div className="monetary-folder-panel donation-registration-panel">
           <div className="donation-modal-body">
             <section className="draft-summary" aria-label="Información inicial del borrador">
               <div>
@@ -453,7 +633,13 @@ function DonationDraftModal({
               </div>
             </section>
 
-            <section className="donation-form-section" aria-labelledby="general-info-title">
+            <section
+              className="donation-form-section"
+              id="donation-section-1-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-1-tab"
+              hidden={activeSection !== 1}
+            >
               <div className="donation-section-heading">
                 <span>Sección 1</span>
                 <h3 id="general-info-title">Información general del donativo</h3>
@@ -465,7 +651,6 @@ function DonationDraftModal({
                     Tipo de registro <span aria-hidden="true">*</span>
                   </label>
                   <input
-                    ref={firstFieldRef}
                     id="tipo-registro"
                     name="tipoRegistro"
                     type="text"
@@ -586,17 +771,6 @@ function DonationDraftModal({
                   )}
                 </div>
 
-                <div className="donation-field donation-field--wide">
-                  <label htmlFor="observaciones">Observaciones</label>
-                  <textarea
-                    id="observaciones"
-                    name="observaciones"
-                    value={form.observaciones}
-                    onChange={(event) => updateField('observaciones', event.target.value)}
-                    placeholder="Ingrese observaciones adicionales"
-                    rows={3}
-                  />
-                </div>
               </div>
 
               <div className="supporting-documents">
@@ -733,7 +907,13 @@ function DonationDraftModal({
               </div>
             </section>
 
-            <section className="donation-form-section" aria-labelledby="upc-info-title">
+            <section
+              className="donation-form-section"
+              id="donation-section-2-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-2-tab"
+              hidden={activeSection !== 2}
+            >
               <div className="donation-section-heading">
                 <span>Sección 2</span>
                 <h3 id="upc-info-title">
@@ -838,7 +1018,13 @@ function DonationDraftModal({
               </div>
             </section>
 
-            <section className="donation-form-section" aria-labelledby="agreement-title">
+            <section
+              className="donation-form-section"
+              id="donation-section-3-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-3-tab"
+              hidden={activeSection !== 3}
+            >
               <div className="donation-section-heading">
                 <span>Sección 3</span>
                 <h3 id="agreement-title">Documento de acuerdo de donación</h3>
@@ -920,6 +1106,425 @@ function DonationDraftModal({
               </div>
             </section>
 
+            <section
+              className="donation-form-section"
+              id="donation-section-4-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-4-tab"
+              hidden={activeSection !== 4}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 4</span>
+                <h3 id="receipt-title">Comprobante de donación</h3>
+              </div>
+
+              <div className="donation-fields-grid">
+                <div className="donation-field">
+                  <label htmlFor="receipt-number">N° de Comprobante</label>
+                  <input
+                    id="receipt-number"
+                    type="text"
+                    maxLength={200}
+                    value={form.numeroComprobante}
+                    onChange={(event) => updateField('numeroComprobante', event.target.value)}
+                    disabled={isSaving}
+                  />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="receipt-date">Fecha de comprobante</label>
+                  <DatePicker
+                    id="receipt-date"
+                    value={form.fechaComprobante}
+                    onChange={(value) => updateField('fechaComprobante', value)}
+                    disabled={isSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="supporting-documents">
+                <div className="supporting-documents-heading">
+                  <div>
+                    <span>Documento de la Sección 4</span>
+                    <h4>Comprobante emitido por Gerencia Financiera</h4>
+                    <p>El archivo seleccionado se cargará al guardar el borrador.</p>
+                  </div>
+                  <strong>
+                    {attachments.financialReceipt
+                      ? 'Documento seleccionado'
+                      : 'Sin documento seleccionado'}
+                  </strong>
+                </div>
+
+                <div className="attachment-grid attachment-grid--single">
+                  <article className="attachment-card">
+                    <div className="attachment-card-heading">
+                      <div className="attachment-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M6 2h8l5 5v15H6V2Zm2 2v16h9V8h-4V4H8Zm7 1.4V6h.6L15 5.4ZM10 11h5v2h-5v-2Zm0 4h5v2h-5v-2Z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h5>Comprobante emitido por Gerencia Financiera</h5>
+                        <p>PDF, DOC o DOCX, máximo 10 MB</p>
+                      </div>
+                    </div>
+                    <div className="attachment-picker">
+                      <input
+                        className="attachment-file-input"
+                        id="financial-receipt-file"
+                        name="financialReceiptFile"
+                        type="file"
+                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        disabled={isSaving}
+                        onChange={(event) => {
+                          updateAttachment('financialReceipt', event.target.files?.[0])
+                          event.currentTarget.value = ''
+                        }}
+                      />
+                      <label htmlFor="financial-receipt-file">
+                        {attachments.financialReceipt
+                          ? 'Reemplazar archivo'
+                          : 'Seleccionar archivo'}
+                      </label>
+                      <span title={attachments.financialReceipt?.name}>
+                        {attachments.financialReceipt ? (
+                          <>
+                            {attachments.financialReceipt.name}
+                            <small>{formatFileSize(attachments.financialReceipt.size)}</small>
+                          </>
+                        ) : (
+                          'Ningún archivo seleccionado'
+                        )}
+                      </span>
+                      {attachments.financialReceipt && (
+                        <button
+                          className="attachment-remove-button"
+                          type="button"
+                          onClick={() => removeAttachment('financialReceipt')}
+                          disabled={isSaving}
+                        >
+                          Quitar
+                        </button>
+                      )}
+                    </div>
+                    {attachmentErrors.financialReceipt && (
+                      <p className="attachment-error" role="alert">
+                        {attachmentErrors.financialReceipt}
+                      </p>
+                    )}
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <section
+              className="donation-form-section"
+              id="donation-section-5-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-5-tab"
+              hidden={activeSection !== 5}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 5</span>
+                <h3 id="safekeeping-title">Resguardo y distribución</h3>
+              </div>
+
+              <div className="donation-fields-grid">
+                <div className="donation-field">
+                  <label htmlFor="safekeeping-warehouse">Almacén de Resguardo de donativo</label>
+                  <FormSelect
+                    id="safekeeping-warehouse"
+                    value={form.almacenResguardo}
+                    options={safekeepingWarehouses.map((item) => ({
+                      value: item.id,
+                      label: item.nombre,
+                    }))}
+                    onChange={(value) => updateField('almacenResguardo', value)}
+                    placeholder="Seleccione un almacén"
+                    disabled={isSaving}
+                    loading={isSafekeepingWarehousesLoading}
+                    error={safekeepingWarehousesError}
+                    onRetry={() => void loadSafekeepingWarehouses()}
+                  />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="distribution-place">Lugar de distribución</label>
+                  <FormMultiSelect
+                    id="distribution-place"
+                    values={form.lugarDistribucion}
+                    options={distributionPlaces.map((item) => ({
+                      value: item.id,
+                      label: item.nombre,
+                    }))}
+                    onChange={updateDistributionPlaces}
+                    disabled={isSaving}
+                    loading={isDistributionPlacesLoading}
+                    error={distributionPlacesError}
+                    onRetry={() => void loadDistributionPlaces()}
+                  />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="financial-report-date">Fecha reporte financiero</label>
+                  <DatePicker
+                    id="financial-report-date"
+                    value={form.fechaReporteFinanciero}
+                    onChange={(value) => updateField('fechaReporteFinanciero', value)}
+                    disabled={isSaving}
+                  />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="destination-warehouse">Almacén destino</label>
+                  <FormSelect
+                    id="destination-warehouse"
+                    value={form.almacenDestino}
+                    options={destinationWarehouses.map((item) => ({
+                      value: item.id,
+                      label: item.nombre,
+                    }))}
+                    onChange={(value) => updateField('almacenDestino', value)}
+                    placeholder="Seleccione un almacén"
+                    disabled={isSaving}
+                    loading={isDestinationWarehousesLoading}
+                    error={destinationWarehousesError}
+                    onRetry={() => void loadDestinationWarehouses()}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section
+              className="donation-form-section"
+              id="donation-section-6-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-6-tab"
+              hidden={activeSection !== 6}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 6</span>
+                <h3>06 · Almacenes y Productos</h3>
+              </div>
+
+              <DonationWarehousesSection
+                value={warehouseGroups}
+                warehouses={safekeepingWarehouses}
+                onChange={setWarehouseGroups}
+                disabled={isSaving}
+                warehousesLoading={isSafekeepingWarehousesLoading}
+                warehousesError={safekeepingWarehousesError}
+                onRetryWarehouses={() => void loadSafekeepingWarehouses()}
+              />
+            </section>
+
+            <section
+              className="donation-form-section"
+              id="donation-section-7-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-7-tab"
+              hidden={activeSection !== 7}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 7</span>
+                <h3 id="record-documentation-title">Documentación de Acta</h3>
+              </div>
+
+              <div className="donation-fields-grid">
+                <div className="donation-field donation-field--wide">
+                  <label htmlFor="record-framework">Marco del acta</label>
+                  <textarea id="record-framework" rows={3} maxLength={5000} value={form.marcoActa} onChange={(event) => updateField('marcoActa', event.target.value)} disabled={isSaving} />
+                </div>
+                <div className="donation-field donation-field--wide">
+                  <label htmlFor="record-objective">Objetivo del acta</label>
+                  <textarea id="record-objective" rows={3} maxLength={5000} value={form.objetivoActa} onChange={(event) => updateField('objetivoActa', event.target.value)} disabled={isSaving} />
+                </div>
+                <div className="donation-field donation-field--wide">
+                  <label htmlFor="record-delivered">Entregados en acta</label>
+                  <textarea id="record-delivered" rows={3} maxLength={5000} value={form.entregadosActa} onChange={(event) => updateField('entregadosActa', event.target.value)} disabled={isSaving} />
+                </div>
+                <div className="donation-field donation-field--wide">
+                  <label htmlFor="record-delivery">Entrega del acta</label>
+                  <textarea id="record-delivery" rows={3} maxLength={5000} value={form.entregaActa} onChange={(event) => updateField('entregaActa', event.target.value)} disabled={isSaving} />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="record-city">Ciudad</label>
+                  <FormSelect
+                    id="record-city"
+                    value={form.ciudad}
+                    options={cities.map((item) => ({ value: item.id, label: item.ciudad }))}
+                    onChange={(value) => updateField('ciudad', value)}
+                    placeholder="Seleccione una ciudad"
+                    disabled={isSaving}
+                    loading={isCitiesLoading}
+                    error={citiesError}
+                    onRetry={() => void loadCities()}
+                  />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="record-department">Departamento</label>
+                  <input id="record-department" type="text" value={selectedCity?.departamento ?? ''} readOnly />
+                </div>
+                <div className="donation-field donation-field--wide">
+                  <label htmlFor="observaciones">Observaciones</label>
+                  <textarea
+                    id="observaciones"
+                    name="observaciones"
+                    value={form.observaciones}
+                    onChange={(event) => updateField('observaciones', event.target.value)}
+                    placeholder="Ingrese observaciones adicionales"
+                    rows={3}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section
+              className="donation-form-section"
+              id="donation-section-8-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-8-tab"
+              hidden={activeSection !== 8}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 8</span>
+                <h3 id="donor-info-title">Información del Donante o Representante</h3>
+              </div>
+
+              <div className="donation-fields-grid">
+                <div className="donation-field">
+                  <label htmlFor="donor-name">Nombre del donante o representante</label>
+                  <input id="donor-name" type="text" maxLength={300} value={form.nombreDonante} onChange={(event) => updateField('nombreDonante', event.target.value)} disabled={isSaving} />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="donor-position">Cargo</label>
+                  <input id="donor-position" type="text" maxLength={300} value={form.cargoDonante} onChange={(event) => updateField('cargoDonante', event.target.value)} disabled={isSaving} />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="donor-entity">Nombre de la entidad</label>
+                  <input id="donor-entity" type="text" maxLength={500} value={form.nombreEntidad} onChange={(event) => updateField('nombreEntidad', event.target.value)} disabled={isSaving} />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="donor-dui">DUI del donante</label>
+                  <input
+                    id="donor-dui"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
+                    placeholder="00000000-0"
+                    value={form.duiDonante}
+                    onChange={(event) => updateField('duiDonante', formatDui(event.target.value))}
+                    disabled={isSaving}
+                    aria-invalid={Boolean(errors.duiDonante)}
+                    aria-describedby={errors.duiDonante ? 'donor-dui-error' : undefined}
+                  />
+                  {errors.duiDonante && <p className="donation-field-error" id="donor-dui-error" role="alert">{errors.duiDonante}</p>}
+                </div>
+              </div>
+            </section>
+
+            <section
+              className="donation-form-section"
+              id="donation-section-9-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-9-tab"
+              hidden={activeSection !== 9}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 9</span>
+                <h3 id="reception-manager-title">Encargado de Recepción CONAPINA</h3>
+              </div>
+
+              <div className="donation-fields-grid">
+                <div className="donation-field">
+                  <label htmlFor="reception-manager-name">Nombre del encargado</label>
+                  <FormSelect
+                    id="reception-manager-name"
+                    value={form.encargadoPersonalId}
+                    options={receptionManagers.map((manager) => ({
+                      value: manager.id,
+                      label: manager.nombre,
+                    }))}
+                    onChange={(value) => updateField('encargadoPersonalId', value)}
+                    placeholder="Buscar encargado..."
+                    searchable
+                    disabled={isSaving}
+                    loading={isReceptionManagersLoading}
+                    error={receptionManagersError}
+                    onRetry={() => void loadReceptionManagers()}
+                  />
+                </div>
+                <div className="donation-field">
+                  <label htmlFor="reception-manager-position">Cargo del encargado</label>
+                  <input id="reception-manager-position" type="text" value={selectedReceptionManager?.cargo ?? ''} readOnly />
+                </div>
+              </div>
+            </section>
+
+            <section
+              className="donation-form-section"
+              id="donation-section-10-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-10-tab"
+              hidden={activeSection !== 10}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 10</span>
+                <h3 id="photo-record-title">Registro fotográfico</h3>
+              </div>
+
+              <div className="attachment-grid photo-attachment-grid">
+                {photoAttachmentSlots.map(({ field, title }) => {
+                  const file = attachments[field]
+                  return (
+                    <article className="attachment-card photo-attachment-card" key={field}>
+                      <div className="attachment-card-heading">
+                        <div className="attachment-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24">
+                            <path d="M4 5h4l1.5-2h5L16 5h4v16H4V5Zm2 2v12h12V7h-3l-1.5-2h-3L9 7H6Zm6 2.5A3.5 3.5 0 1 1 12 16.5 3.5 3.5 0 0 1 12 9.5Zm0 2A1.5 1.5 0 1 0 12 14.5 1.5 1.5 0 0 0 12 11.5Z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h5>{title}</h5>
+                          <p>{file ? `${file.name} · ${formatFileSize(file.size)}` : 'Sin fotografía'}</p>
+                        </div>
+                      </div>
+
+                      {file && <LocalImagePreview file={file} />}
+
+                      <div className="attachment-picker">
+                        <input
+                          className="attachment-file-input"
+                          id={`${field}-file`}
+                          type="file"
+                          accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                          disabled={isSaving}
+                          onChange={(event) => {
+                            updateAttachment(field, event.target.files?.[0])
+                            event.currentTarget.value = ''
+                          }}
+                        />
+                        <label htmlFor={`${field}-file`}>
+                          {file ? 'Reemplazar imagen' : 'Seleccionar imagen'}
+                        </label>
+                        <span>{file?.name ?? 'Ninguna imagen seleccionada'}</span>
+                        {file && (
+                          <button
+                            className="attachment-remove-button"
+                            type="button"
+                            onClick={() => removeAttachment(field)}
+                            disabled={isSaving}
+                          >
+                            Quitar
+                          </button>
+                        )}
+                      </div>
+                      {attachmentErrors[field] && (
+                        <p className="attachment-error" role="alert">{attachmentErrors[field]}</p>
+                      )}
+                    </article>
+                  )
+                })}
+              </div>
+            </section>
+
             <div
               className={`donation-form-message${
                 statusType === 'error' ? ' donation-form-message--error' : ''
@@ -930,27 +1535,58 @@ function DonationDraftModal({
               {statusMessage}
             </div>
           </div>
+        </div>
 
-          <footer className="donation-modal-footer">
+        <footer className="monetary-folder-actions donation-registration-actions">
+          <p>Los datos se conservarán mientras permanezca en este formulario.</p>
+          <div>
             <button
               className="modal-secondary-button"
               type="button"
               onClick={onClose}
               disabled={isSaving}
             >
-              Cancelar
+              Volver
             </button>
-            <button className="modal-primary-button" type="submit" disabled={isSaving}>
-              {isSaving
-                ? 'Guardando...'
-                : createdDonationId
-                  ? 'Reintentar documentos'
-                  : 'Guardar borrador'}
-            </button>
-          </footer>
-        </form>
-      </div>
-    </div>
+            {hasPreviousSection && (
+              <button
+                className="modal-secondary-button"
+                type="button"
+                onClick={goToPreviousSection}
+                disabled={isSaving}
+              >
+                Anterior
+              </button>
+            )}
+            {hasNextSection ? (
+              <button
+                className="modal-primary-button"
+                type="button"
+                onClick={goToNextSection}
+                disabled={isSaving}
+              >
+                Siguiente
+              </button>
+            ) : (
+              <button className="modal-primary-button" type="submit" disabled={isSaving}>
+                {isSaving
+                  ? 'Guardando...'
+                  : createdDonationId
+                    ? 'Reintentar documentos'
+                    : 'Guardar borrador'}
+              </button>
+            )}
+          </div>
+        </footer>
+          </div>
+          <DonationSectionNavigator
+            activeSection={activeSection}
+            invalidSections={invalidSections}
+            onChange={setActiveSection}
+          />
+        </div>
+      </form>
+    </main>
   )
 }
 

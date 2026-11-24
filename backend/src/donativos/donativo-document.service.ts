@@ -17,17 +17,48 @@ const backendDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../..
 const storageDirectory = resolve(backendDirectory, 'storage', 'donativos')
 const backendStorageDirectory = resolve(backendDirectory, 'storage')
 
-const allowedFiles = {
-  'application/pdf': { extension: '.pdf', signature: Buffer.from('%PDF-') },
+type AllowedFile = {
+  extensions: readonly string[]
+  validSignature: (contents: Buffer) => boolean
+}
+
+const allowedFiles: Record<string, AllowedFile> = {
+  'application/pdf': {
+    extensions: ['.pdf'],
+    validSignature: (contents) => contents.subarray(0, 5).equals(Buffer.from('%PDF-')),
+  },
   'application/msword': {
-    extension: '.doc',
-    signature: Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+    extensions: ['.doc'],
+    validSignature: (contents) =>
+      contents.subarray(0, 8).equals(
+        Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+      ),
   },
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': {
-    extension: '.docx',
-    signature: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    extensions: ['.docx'],
+    validSignature: (contents) =>
+      contents.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])),
   },
-} as const
+  'image/jpeg': {
+    extensions: ['.jpg', '.jpeg'],
+    validSignature: (contents) =>
+      contents.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])),
+  },
+  'image/png': {
+    extensions: ['.png'],
+    validSignature: (contents) =>
+      contents.subarray(0, 8).equals(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      ),
+  },
+  'image/webp': {
+    extensions: ['.webp'],
+    validSignature: (contents) =>
+      contents.length >= 12 &&
+      contents.subarray(0, 4).equals(Buffer.from('RIFF')) &&
+      contents.subarray(8, 12).equals(Buffer.from('WEBP')),
+  },
+}
 
 export class DonationDocumentValidationError extends Error {}
 export class DonationNotFoundError extends Error {}
@@ -61,7 +92,6 @@ export class DonationDocumentService {
       upload.tipoDocumento,
     )
 
-    const fileRule = allowedFiles[upload.mimeType as keyof typeof allowedFiles]
     const prefix =
       upload.tipoDocumento === 'MEMO_INICIAL'
         ? 'memo_inicial'
@@ -69,8 +99,14 @@ export class DonationDocumentService {
           ? 'memo_de'
           : upload.tipoDocumento === 'ACTA_CONAPINA'
             ? 'acta_conapina'
-            : 'acuerdo_donacion'
-    const storedName = `${prefix}_${randomUUID()}${fileRule.extension}`
+            : upload.tipoDocumento === 'ACUERDO_DONACION'
+              ? 'acuerdo_donacion'
+              : upload.tipoDocumento === 'COMPROBANTE_GF'
+                ? 'comprobante_gf'
+                : upload.tipoDocumento === 'REGISTRO_FOTO_1'
+                  ? 'registro_foto_1'
+                  : 'registro_foto_2'
+    const storedName = `${prefix}_${randomUUID()}${extname(upload.originalName).toLowerCase()}`
     const relativePath = `donativos/${donativoKey}/${storedName}`
     const physicalDirectory = resolve(this.storageRoot, donativoKey)
     const physicalPath = resolve(physicalDirectory, storedName)
@@ -158,20 +194,23 @@ export class DonationDocumentService {
       upload.tipoDocumento !== 'MEMO_INICIAL' &&
       upload.tipoDocumento !== 'MEMO_DE' &&
       upload.tipoDocumento !== 'ACTA_CONAPINA' &&
-      upload.tipoDocumento !== 'ACUERDO_DONACION'
+      upload.tipoDocumento !== 'ACUERDO_DONACION' &&
+      upload.tipoDocumento !== 'COMPROBANTE_GF' &&
+      upload.tipoDocumento !== 'REGISTRO_FOTO_1' &&
+      upload.tipoDocumento !== 'REGISTRO_FOTO_2'
     ) {
       throw new DonationDocumentValidationError()
     }
 
-    const fileRule = allowedFiles[upload.mimeType as keyof typeof allowedFiles]
-    if (!fileRule || extname(upload.originalName).toLowerCase() !== fileRule.extension) {
+    const fileRule = allowedFiles[upload.mimeType]
+    if (!fileRule || !fileRule.extensions.includes(extname(upload.originalName).toLowerCase())) {
       throw new DonationDocumentValidationError()
     }
 
     if (
       upload.contents.byteLength === 0 ||
       upload.contents.byteLength > MAX_FILE_BYTES ||
-      !upload.contents.subarray(0, fileRule.signature.length).equals(fileRule.signature)
+      !fileRule.validSignature(upload.contents)
     ) {
       throw new DonationDocumentValidationError()
     }

@@ -5,6 +5,7 @@ import type { DonationListItem } from '../services/donations'
 import DonationDraftModal from '../components/DonationDraftModal'
 import DonationDetailModal from '../components/DonationDetailModal'
 import conapinaLogo from '../assets/Logo-CONAPINA-siglas-negativo.png'
+import DonativoMonetarioForm from './DonativoMonetarioForm'
 import './Inicio.css'
 
 type InicioProps = {
@@ -13,7 +14,13 @@ type InicioProps = {
   onLogout: () => void
 }
 
-type ActiveView = 'inicio' | 'donaciones'
+type ActiveView =
+  | 'inicio'
+  | 'donaciones'
+  | 'registro-donacion'
+  | 'detalle-donacion'
+  | 'donativos-monetarios'
+  | 'registro-donativo-monetario'
 
 type WorkspaceHeroProps = {
   eyebrow: string
@@ -23,6 +30,22 @@ type WorkspaceHeroProps = {
 }
 
 const DONATIONS_PER_PAGE = 10
+const VIEW_PATHS: Record<ActiveView, string> = {
+  inicio: '/inicio',
+  donaciones: '/donaciones',
+  'registro-donacion': '/donaciones/registro',
+  'detalle-donacion': '/donaciones/detalle',
+  'donativos-monetarios': '/donativos-monetarios',
+  'registro-donativo-monetario': '/donativos-monetarios/registro',
+}
+
+function viewFromPath(pathname: string): ActiveView {
+  const matchedView = (Object.entries(VIEW_PATHS) as Array<[ActiveView, string]>).find(
+    ([, path]) => path === pathname,
+  )
+
+  return matchedView?.[0] ?? 'inicio'
+}
 
 function WorkspaceHero({ eyebrow, title, description, titleId }: WorkspaceHeroProps) {
   return (
@@ -61,9 +84,12 @@ function managementTypeClass(value: string): string {
 }
 
 function Inicio({ user, authToken, onLogout }: InicioProps) {
-  const [activeView, setActiveView] = useState<ActiveView>('inicio')
-  const [isDonationModalOpen, setIsDonationModalOpen] = useState(false)
-  const [selectedDonationId, setSelectedDonationId] = useState<string | null>(null)
+  const [activeView, setActiveView] = useState<ActiveView>(() =>
+    viewFromPath(window.location.pathname),
+  )
+  const [selectedDonationId, setSelectedDonationId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get('id'),
+  )
   const [donations, setDonations] = useState<DonationListItem[]>([])
   const [isDonationsLoading, setIsDonationsLoading] = useState(true)
   const [donationsError, setDonationsError] = useState(false)
@@ -100,8 +126,30 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
   }, [authToken])
 
   useEffect(() => {
-    void loadDonations()
+    if (activeView === 'inicio' || activeView === 'donaciones') void loadDonations()
   }, [activeView, loadDonations])
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveView(viewFromPath(window.location.pathname))
+      setSelectedDonationId(new URLSearchParams(window.location.search).get('id'))
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  const navigateTo = (view: ActiveView) => {
+    const path = VIEW_PATHS[view]
+    if (window.location.pathname !== path) window.history.pushState({}, '', path)
+    setActiveView(view)
+  }
+
+  const navigateToDonationDetail = (donationId: string) => {
+    const query = new URLSearchParams({ id: donationId })
+    window.history.pushState({}, '', `${VIEW_PATHS['detalle-donacion']}?${query}`)
+    setSelectedDonationId(donationId)
+    setActiveView('detalle-donacion')
+  }
 
   const handleDeleteDonation = async () => {
     if (!donationToDelete || isDeletingDonation) return
@@ -202,7 +250,7 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
             <button
               className={`nav-item${activeView === 'inicio' ? ' nav-item--active' : ''}`}
               type="button"
-              onClick={() => setActiveView('inicio')}
+              onClick={() => navigateTo('inicio')}
               aria-pressed={activeView === 'inicio'}
             >
               <span className="nav-icon nav-icon--home" aria-hidden="true">
@@ -214,10 +262,10 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
               <span>Inicio</span>
             </button>
             <button
-              className={`nav-item${activeView === 'donaciones' ? ' nav-item--active' : ''}`}
+              className={`nav-item${activeView === 'donaciones' || activeView === 'registro-donacion' || activeView === 'detalle-donacion' ? ' nav-item--active' : ''}`}
               type="button"
-              onClick={() => setActiveView('donaciones')}
-              aria-pressed={activeView === 'donaciones'}
+              onClick={() => navigateTo('donaciones')}
+              aria-pressed={activeView === 'donaciones' || activeView === 'registro-donacion' || activeView === 'detalle-donacion'}
             >
               <span className="nav-icon nav-icon--donations" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
@@ -227,11 +275,28 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
               </span>
               <span>Donativos</span>
             </button>
+            <button
+              className={`nav-item${activeView === 'donativos-monetarios' || activeView === 'registro-donativo-monetario' ? ' nav-item--active' : ''}`}
+              type="button"
+              onClick={() => navigateTo('donativos-monetarios')}
+              aria-pressed={
+                activeView === 'donativos-monetarios' ||
+                activeView === 'registro-donativo-monetario'
+              }
+            >
+              <span className="nav-icon nav-icon--monetary" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <rect x="3" y="6" width="18" height="12" rx="2" />
+                  <path d="M7 9h.01M17 15h.01M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z" />
+                </svg>
+              </span>
+              <span>Donativos Monetarios</span>
+            </button>
           </nav>
         </aside>
 
         {activeView === 'inicio' ? (
-          <main className="dashboard-main" id="inicio">
+          <main className="dashboard-main dashboard-view" id="inicio" key="inicio">
             <WorkspaceHero
               eyebrow="MI ESPACIO DE TRABAJO"
               title="Bienvenido a SIGEDI · Sistema de Gestión de Donaciones Institucionales"
@@ -265,8 +330,8 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
               </div>
             </section>
           </main>
-        ) : (
-          <main className="dashboard-main" id="donaciones">
+        ) : activeView === 'donaciones' ? (
+          <main className="dashboard-main dashboard-view" id="donaciones" key="donaciones">
             <WorkspaceHero
               eyebrow="MÓDULO DE DONATIVOS"
               title="Gestión de Donaciones Institucionales"
@@ -292,7 +357,7 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
               <button
                 className="primary-action-button"
                 type="button"
-                onClick={() => setIsDonationModalOpen(true)}
+                onClick={() => navigateTo('registro-donacion')}
               >
                 Registrar nueva donación
               </button>
@@ -398,7 +463,7 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
                                 <button
                                   className="view-donation-button"
                                   type="button"
-                                  onClick={() => setSelectedDonationId(donation.id)}
+                                  onClick={() => navigateToDonationDetail(donation.id)}
                                 >
                                   Ver
                                 </button>
@@ -445,26 +510,102 @@ function Inicio({ user, authToken, onLogout }: InicioProps) {
               )}
             </section>
           </main>
+        ) : activeView === 'registro-donacion' ? (
+          <DonationDraftModal
+            creatorName={fullName}
+            authToken={authToken}
+            onClose={() => navigateTo('donaciones')}
+            onSaved={loadDonations}
+          />
+        ) : activeView === 'detalle-donacion' ? (
+          selectedDonationId ? (
+            <DonationDetailModal
+              donationId={selectedDonationId}
+              authToken={authToken}
+              onClose={() => {
+                setSelectedDonationId(null)
+                navigateTo('donaciones')
+              }}
+              onUpdated={() => void loadDonations()}
+            />
+          ) : (
+            <main className="dashboard-main dashboard-view" id="detalle-donacion-no-disponible">
+              <p className="donations-list-status">No fue posible identificar el donativo.</p>
+              <button className="primary-action-button" type="button" onClick={() => navigateTo('donaciones')}>
+                Volver al listado
+              </button>
+            </main>
+          )
+        ) : activeView === 'donativos-monetarios' ? (
+          <main
+            className="dashboard-main dashboard-view"
+            id="donativos-monetarios"
+            key="donativos-monetarios"
+          >
+            <WorkspaceHero
+              eyebrow="MÓDULO DE DONATIVOS MONETARIOS"
+              title="Gestión de Donativos Monetarios"
+              description="Registre, consulte y administre los donativos monetarios institucionales."
+              titleId="monetary-donations-title"
+            />
+
+            <section
+              className="module-card module-card--action"
+              aria-labelledby="monetary-module-title"
+            >
+              <div className="module-card-content">
+                <div className="module-icon module-icon--monetary" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <rect x="3" y="6" width="18" height="12" rx="2" />
+                    <path d="M7 9h.01M17 15h.01M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 id="monetary-module-title">Registro de Donativos Monetarios</h2>
+                  <p>Gestión y seguimiento de los donativos monetarios institucionales.</p>
+                </div>
+              </div>
+              <button
+                className="primary-action-button"
+                type="button"
+                onClick={() => navigateTo('registro-donativo-monetario')}
+              >
+                Registrar Donación Monetaria
+              </button>
+            </section>
+
+            <section className="information-section" aria-labelledby="monetary-summary-title">
+              <div className="information-heading">
+                <h2 id="monetary-summary-title">Resumen de donativos monetarios</h2>
+              </div>
+              <div className="information-grid">
+                {['Total de donativos monetarios', 'En proceso', 'Finalizados'].map((label) => (
+                  <article className="information-card" key={label}>
+                    <p>{label}</p>
+                    <strong aria-label="Sin datos disponibles">—</strong>
+                    <span className="information-note">Sin datos disponibles</span>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="donations-list" aria-labelledby="monetary-list-title">
+              <div className="donations-list-heading">
+                <h2 id="monetary-list-title">Listado de donativos monetarios</h2>
+                <span>Integración pendiente</span>
+              </div>
+              <p className="donations-list-status">
+                Aún no hay datos disponibles. El listado se habilitará en una fase posterior.
+              </p>
+            </section>
+          </main>
+        ) : (
+          <DonativoMonetarioForm
+            authToken={authToken}
+            onBack={() => navigateTo('donativos-monetarios')}
+          />
         )}
       </div>
-
-      {isDonationModalOpen && (
-        <DonationDraftModal
-          creatorName={fullName}
-          authToken={authToken}
-          onClose={() => setIsDonationModalOpen(false)}
-          onSaved={loadDonations}
-        />
-      )}
-
-      {selectedDonationId && (
-        <DonationDetailModal
-          donationId={selectedDonationId}
-          authToken={authToken}
-          onClose={() => setSelectedDonationId(null)}
-          onUpdated={() => void loadDonations()}
-        />
-      )}
 
       {deletionMessage && (
         <div className="donation-deletion-notice" role="status">
