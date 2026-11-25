@@ -16,6 +16,11 @@ import type {
   DonationListItem,
 } from '../donativos/donativo.types.ts'
 import type { DonationRepository } from '../donativos/donativo.repository.ts'
+import type {
+  DonationIncome,
+  DonationIncomeInput,
+} from '../donativos/donativo-income.types.ts'
+import { calculateIncomeProductTotal } from '../donativos/donativo-income.types.ts'
 import {
   DonationDeletionError,
   DonationDeletionNotFoundError,
@@ -143,6 +148,19 @@ type TestServerOverrides = {
   listConapinaReceptionManagers?: () => Promise<ConapinaReceptionManager[]>
   findConapinaReceptionManager?: (id: string) => Promise<ConapinaReceptionManager | null>
   deleteDonation?: (donativoId: string) => Promise<unknown>
+  createDonationIncome?: (
+    donativoId: string,
+    createdBy: string,
+    input: DonationIncomeInput,
+  ) => Promise<DonationIncome>
+  listDonationIncomes?: (donativoId: string) => Promise<DonationIncome[]>
+  updateDonationIncome?: (
+    donativoId: string,
+    incomeId: string,
+    updatedBy: string,
+    input: DonationIncomeInput,
+  ) => Promise<DonationIncome>
+  deleteDonationIncome?: (donativoId: string, incomeId: string) => Promise<void>
 }
 
 async function startTestServer(
@@ -205,6 +223,14 @@ async function startTestServer(
       deleteDonation: overrides.deleteDonation ?? (async () => {
         throw new Error('No debe ejecutarse')
       }),
+      createDonationIncome: overrides.createDonationIncome ?? (async () => {
+        throw new Error('No debe ejecutarse')
+      }),
+      listDonationIncomes: overrides.listDonationIncomes ?? (async () => []),
+      updateDonationIncome: overrides.updateDonationIncome ?? (async () => {
+        throw new Error('No debe ejecutarse')
+      }),
+      deleteDonationIncome: overrides.deleteDonationIncome ?? (async () => undefined),
     }),
   )
   servers.push(server)
@@ -212,6 +238,171 @@ async function startTestServer(
   const { port } = server.address() as AddressInfo
   return `http://127.0.0.1:${port}`
 }
+
+describe('API de recepciones y productos', () => {
+  const input: DonationIncomeInput = {
+    nombre_almacen: 'Almacén central',
+    nombre_proveedor: 'Proveedor institucional',
+    fecha_recepcion_donacion: '2026-11-25',
+    description: 'Recepción de prueba',
+    productos: [
+      { brand_name: 'SONY', name_product: 'LAPTOP', amount: 3, price: 250 },
+      { brand_name: '', name_product: 'Producto B', amount: 2, price: 0 },
+    ],
+  }
+
+  const makeIncome = (id = 'incomes:income1'): DonationIncome => ({
+    id,
+    donativo_id: 'donativos:donation1',
+    nombre_almacen: input.nombre_almacen,
+    nombre_proveedor: input.nombre_proveedor,
+    fecha_recepcion_donacion: '2026-11-25T00:00:00.000Z',
+    description: input.description,
+    created_by: 'usuarios:user1',
+    created_at: '2026-11-25T12:00:00.000Z',
+    updated_by: null,
+    updated_at: '2026-11-25T12:00:00.000Z',
+    productos: input.productos.map((product, index) => ({
+      id: `detincomes:product${index + 1}`,
+      income_id: id,
+      ...product,
+      total_price: calculateIncomeProductTotal(product.amount, product.price),
+      created_by: 'usuarios:user1',
+      created_at: '2026-11-25T12:00:00.000Z',
+      updated_by: null,
+      updated_at: '2026-11-25T12:00:00.000Z',
+    })),
+  })
+
+  test('POST crea una recepción anidada usando el usuario autenticado', async () => {
+    let receivedUser = ''
+    let receivedInput: DonationIncomeInput | null = null
+    const baseUrl = await startTestServer(async () => ({ ok: false, reason: 'USER_NOT_FOUND' }), {
+      resolveSession: (token) => token === 'valid-token' ? 'usuarios:user1' : null,
+      createDonationIncome: async (_donativoId, createdBy, body) => {
+        receivedUser = createdBy
+        receivedInput = body
+        return makeIncome()
+      },
+    })
+
+    const response = await fetch(`${baseUrl}/api/donativos/donativos%3Adonation1/incomes`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    })
+    const body = await response.json() as { ok: boolean; income: DonationIncome }
+
+    assert.equal(response.status, 201)
+    assert.equal(body.ok, true)
+    assert.equal(receivedUser, 'usuarios:user1')
+    assert.deepEqual(receivedInput, input)
+    assert.equal(body.income.productos[0]?.total_price, 750)
+  })
+
+  test('GET reconstruye varios incomes con sus productos independientes', async () => {
+    const incomes = [makeIncome('incomes:income1'), makeIncome('incomes:income2')]
+    const baseUrl = await startTestServer(async () => ({ ok: false, reason: 'USER_NOT_FOUND' }), {
+      resolveSession: () => 'usuarios:user1',
+      listDonationIncomes: async () => incomes,
+    })
+    const response = await fetch(`${baseUrl}/api/donativos/donativos%3Adonation1/incomes`, {
+      headers: { Authorization: 'Bearer valid-token' },
+    })
+    const body = await response.json() as { ok: boolean; incomes: DonationIncome[] }
+
+    assert.equal(response.status, 200)
+    assert.equal(body.incomes.length, 2)
+    assert.equal(body.incomes[0]?.productos[0]?.income_id, 'incomes:income1')
+    assert.equal(body.incomes[1]?.productos[0]?.income_id, 'incomes:income2')
+  })
+
+  test('PATCH y DELETE conservan la relación donativo-income', async () => {
+    const calls: string[] = []
+    const baseUrl = await startTestServer(async () => ({ ok: false, reason: 'USER_NOT_FOUND' }), {
+      resolveSession: () => 'usuarios:user1',
+      updateDonationIncome: async (donativoId, incomeId, updatedBy) => {
+        calls.push(`patch:${donativoId}:${incomeId}:${updatedBy}`)
+        return makeIncome(incomeId)
+      },
+      deleteDonationIncome: async (donativoId, incomeId) => {
+        calls.push(`delete:${donativoId}:${incomeId}`)
+      },
+    })
+    const itemUrl = `${baseUrl}/api/donativos/donativos%3Adonation1/incomes/incomes%3Aincome1`
+    const patchResponse = await fetch(itemUrl, {
+      method: 'PATCH',
+      headers: {
+        Authorization: 'Bearer valid-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    })
+    const deleteResponse = await fetch(itemUrl, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-token' },
+    })
+
+    assert.equal(patchResponse.status, 200)
+    assert.equal(deleteResponse.status, 200)
+    assert.deepEqual(calls, [
+      'patch:donativos:donation1:incomes:income1:usuarios:user1',
+      'delete:donativos:donation1:incomes:income1',
+    ])
+  })
+
+  test('rechaza productos inválidos y no acepta total_price del navegador', async () => {
+    let called = false
+    const baseUrl = await startTestServer(async () => ({ ok: false, reason: 'USER_NOT_FOUND' }), {
+      resolveSession: () => 'usuarios:user1',
+      createDonationIncome: async () => {
+        called = true
+        return makeIncome()
+      },
+    })
+    const response = await fetch(`${baseUrl}/api/donativos/donativos%3Adonation1/incomes`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ...input,
+        productos: [{ ...input.productos[0], amount: 0, total_price: 999 }],
+      }),
+    })
+
+    assert.equal(response.status, 400)
+    assert.equal(called, false)
+    assert.equal(calculateIncomeProductTotal(3, 250), 750)
+    assert.equal(calculateIncomeProductTotal(3, 19.99), 59.97)
+    assert.equal(calculateIncomeProductTotal(1.5, 10.1), 15.15)
+    assert.equal(calculateIncomeProductTotal(0.1, 0.2), 0.02)
+    assert.equal(calculateIncomeProductTotal(0, 250), 0)
+  })
+
+  test('no clasifica errores inesperados como indisponibilidad de la base', async () => {
+    const baseUrl = await startTestServer(async () => ({ ok: false, reason: 'USER_NOT_FOUND' }), {
+      resolveSession: () => 'usuarios:user1',
+      createDonationIncome: async () => {
+        throw new Error('Fallo inesperado de prueba')
+      },
+    })
+    const response = await fetch(`${baseUrl}/api/donativos/donativos%3Adonation1/incomes`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer valid-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    })
+
+    assert.equal(response.status, 500)
+  })
+})
 
 describe('AuthService', () => {
   test('incrementa intentos fallidos y no registra éxito con contraseña incorrecta', async () => {

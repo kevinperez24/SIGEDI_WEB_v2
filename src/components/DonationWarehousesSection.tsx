@@ -1,32 +1,22 @@
 import DatePicker from './form/DatePicker'
-import FormSelect from './form/FormSelect'
-import type { Section5CatalogItem } from '../services/donations'
+import type { DonationIncome, DonationIncomeInput } from '../services/donations'
 import './DonationWarehousesSection.css'
 
 export type DonationWarehouseProductDraft = {
   id: string
-  brandId: string
-  productId: string
+  recordId?: string
+  brandName: string
+  productName: string
   quantity: string
   unitPrice: string
   editing: boolean
 }
 
-export type ProductBrandCatalogItem = {
-  id: string
-  nombre: string
-}
-
-export type ProductCatalogItem = {
-  id: string
-  nombre: string
-  brandId: string
-}
-
 export type DonationWarehouseDraft = {
   id: string
-  warehouseId: string
-  supplierId: string
+  recordId?: string
+  warehouseName: string
+  supplierName: string
   receptionDate: string
   description: string
   expanded: boolean
@@ -35,14 +25,8 @@ export type DonationWarehouseDraft = {
 
 type DonationWarehousesSectionProps = {
   value: DonationWarehouseDraft[]
-  warehouses: readonly Section5CatalogItem[]
   onChange: (value: DonationWarehouseDraft[]) => void
   disabled?: boolean
-  warehousesLoading?: boolean
-  warehousesError?: string
-  onRetryWarehouses?: () => void
-  brands?: readonly ProductBrandCatalogItem[]
-  products?: readonly ProductCatalogItem[]
 }
 
 let temporaryIdSequence = 0
@@ -55,8 +39,8 @@ function createTemporaryId(prefix: 'warehouse' | 'product'): string {
 function createWarehouse(): DonationWarehouseDraft {
   return {
     id: createTemporaryId('warehouse'),
-    warehouseId: '',
-    supplierId: '',
+    warehouseName: '',
+    supplierName: '',
     receptionDate: '',
     description: '',
     expanded: true,
@@ -67,46 +51,177 @@ function createWarehouse(): DonationWarehouseDraft {
 function createProduct(): DonationWarehouseProductDraft {
   return {
     id: createTemporaryId('product'),
-    brandId: '',
-    productId: '',
+    brandName: '',
+    productName: '',
     quantity: '',
     unitPrice: '',
     editing: true,
   }
 }
 
-function calculateProductTotal(product: DonationWarehouseProductDraft): number {
-  const quantity = Number(product.quantity)
-  const unitPrice = Number(product.unitPrice)
-  if (!Number.isFinite(quantity) || !Number.isFinite(unitPrice)) return 0
-  return Math.max(0, quantity) * Math.max(0, unitPrice)
+function parseDecimal(value: string): { coefficient: bigint; scale: number } {
+  const match = value.trim().toLowerCase().match(/^([+-]?)(\d+)(?:\.(\d*))?(?:e([+-]?\d+))?$/)
+  if (!match) return { coefficient: 0n, scale: 0 }
+  const fraction = match[3] ?? ''
+  const exponent = Number(match[4] ?? 0)
+  let coefficient = BigInt(`${match[1] === '-' ? '-' : ''}${match[2]}${fraction}`)
+  let scale = fraction.length - exponent
+  if (scale < 0) {
+    coefficient *= 10n ** BigInt(-scale)
+    scale = 0
+  }
+  return { coefficient, scale }
 }
 
-function formatUsd(value: number): string {
-  return `$ ${value.toFixed(2)}`
+function multiplyToCents(firstValue: string, secondValue: string): bigint {
+  const first = parseDecimal(firstValue)
+  const second = parseDecimal(secondValue)
+  const product = first.coefficient * second.coefficient
+  const productScale = first.scale + second.scale
+  if (productScale <= 2) return product * (10n ** BigInt(2 - productScale))
+  const divisor = 10n ** BigInt(productScale - 2)
+  let cents = product / divisor
+  const remainder = product < 0n ? -(product % divisor) : product % divisor
+  if (remainder * 2n >= divisor) cents += product < 0n ? -1n : 1n
+  return cents
+}
+
+function calculateProductTotal(product: DonationWarehouseProductDraft): bigint {
+  return multiplyToCents(product.quantity, product.unitPrice)
+}
+
+function calculateWarehouseTotal(warehouse: DonationWarehouseDraft): bigint {
+  return warehouse.products.reduce(
+    (total, product) => total + calculateProductTotal(product),
+    0n,
+  )
+}
+
+function formatUsd(cents: bigint): string {
+  const absolute = cents < 0n ? -cents : cents
+  const dollars = (absolute / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const decimal = (absolute % 100n).toString().padStart(2, '0')
+  return `${cents < 0n ? '-' : ''}$ ${dollars}.${decimal}`
+}
+
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 20h4L19 9a2.12 2.12 0 0 0-3-3L5 17l-1 3Z" />
+      <path d="m14.5 7.5 3 3" />
+    </svg>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="m5 12 4 4L19 6" />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 7h16" />
+      <path d="M9 7V4h6v3" />
+      <path d="m6 7 1 13h10l1-13" />
+      <path d="M10 11v5M14 11v5" />
+    </svg>
+  )
 }
 
 function hasWarehouseData(warehouse: DonationWarehouseDraft): boolean {
   return Boolean(
-    warehouse.warehouseId
-      || warehouse.supplierId
+    warehouse.warehouseName
+      || warehouse.supplierName
       || warehouse.receptionDate
       || warehouse.description.trim()
       || warehouse.products.length,
   )
 }
 
+function hasProductData(product: DonationWarehouseProductDraft): boolean {
+  return Boolean(
+    product.brandName.trim()
+      || product.productName.trim()
+      || product.quantity
+      || product.unitPrice,
+  )
+}
+
+export function donationIncomeToDraft(
+  income: DonationIncome,
+  expanded = true,
+): DonationWarehouseDraft {
+  return {
+    id: createTemporaryId('warehouse'),
+    recordId: income.id,
+    warehouseName: income.nombre_almacen,
+    supplierName: income.nombre_proveedor,
+    receptionDate: income.fecha_recepcion_donacion.slice(0, 10),
+    description: income.description,
+    expanded,
+    products: income.productos.map((product) => ({
+      id: createTemporaryId('product'),
+      recordId: product.id,
+      brandName: product.brand_name,
+      productName: product.name_product,
+      quantity: String(product.amount),
+      unitPrice: Number(product.price).toFixed(2),
+      editing: false,
+    })),
+  }
+}
+
+export function donationWarehouseToInput(
+  warehouse: DonationWarehouseDraft,
+): DonationIncomeInput {
+  return {
+    nombre_almacen: warehouse.warehouseName.trim(),
+    nombre_proveedor: warehouse.supplierName.trim(),
+    fecha_recepcion_donacion: warehouse.receptionDate,
+    description: warehouse.description.trim(),
+    productos: warehouse.products.map((product) => ({
+      ...(product.recordId ? { id: product.recordId } : {}),
+      brand_name: product.brandName.trim(),
+      name_product: product.productName.trim(),
+      amount: Number(product.quantity),
+      price: Number(product.unitPrice),
+    })),
+  }
+}
+
+export function validateDonationWarehouses(
+  warehouses: readonly DonationWarehouseDraft[],
+): string | null {
+  for (const warehouse of warehouses) {
+    if (!warehouse.warehouseName.trim() || !warehouse.supplierName.trim() || !warehouse.receptionDate) {
+      return 'Complete el almacén, proveedor y fecha de cada recepción.'
+    }
+    for (const product of warehouse.products) {
+      if (!product.productName.trim()) return 'Ingrese el nombre de cada producto.'
+      if (!Number.isFinite(Number(product.quantity)) || Number(product.quantity) <= 0) {
+        return 'La cantidad de cada producto debe ser mayor que cero.'
+      }
+      if (!Number.isFinite(Number(product.unitPrice)) || Number(product.unitPrice) < 0) {
+        return 'El precio unitario no puede ser negativo.'
+      }
+    }
+  }
+  return null
+}
+
 function DonationWarehousesSection({
   value,
-  warehouses,
   onChange,
   disabled = false,
-  warehousesLoading = false,
-  warehousesError = '',
-  onRetryWarehouses,
-  brands = [],
-  products = [],
 }: DonationWarehousesSectionProps) {
+  const donationTotal = value.reduce(
+    (total, warehouse) => total + calculateWarehouseTotal(warehouse),
+    0n,
+  )
   const updateWarehouse = (
     warehouseId: string,
     update: (warehouse: DonationWarehouseDraft) => DonationWarehouseDraft,
@@ -147,6 +262,15 @@ function DonationWarehousesSection({
   }
 
   const removeProduct = (warehouseId: string, productId: string) => {
+    const product = value
+      .find((warehouse) => warehouse.id === warehouseId)
+      ?.products.find((item) => item.id === productId)
+    if (
+      product
+      && hasProductData(product)
+      && !window.confirm('Este producto contiene datos. ¿Desea quitarlo?')
+    ) return
+
     updateWarehouse(warehouseId, (warehouse) => ({
       ...warehouse,
       products: warehouse.products.filter((product) => product.id !== productId),
@@ -156,9 +280,10 @@ function DonationWarehousesSection({
   return (
     <div className="donation-warehouses">
       <div className="donation-warehouses-toolbar">
-        <div>
-          <h4>Almacenes asociados</h4>
-          <p>Organice los productos de la donación por almacén.</p>
+        <span className="donation-warehouses-section-number" aria-hidden="true">6</span>
+        <div className="donation-warehouses-toolbar-copy">
+          <h4>Almacenes y productos del donativo</h4>
+          <p>Agregue los productos y organícelos por almacén y proveedor.</p>
         </div>
         <button
           className="modal-primary-button donation-warehouse-add"
@@ -167,13 +292,9 @@ function DonationWarehousesSection({
           disabled={disabled}
         >
           <span aria-hidden="true">＋</span>
-          Agregar almacén
+          Agregar otro almacén/proveedor
         </button>
       </div>
-
-      <p className="donation-warehouses-notice" role="note">
-        Vista previa frontend. Esta sección aún no se incluye en el guardado del donativo.
-      </p>
 
       {value.length === 0 ? (
         <div className="donation-warehouses-empty">
@@ -184,75 +305,92 @@ function DonationWarehousesSection({
         <div className="donation-warehouse-list">
           {value.map((warehouse, warehouseIndex) => {
             const contentId = `${warehouse.id}-content`
+            const warehouseTotal = calculateWarehouseTotal(warehouse)
             return (
               <article
-                className={`donation-warehouse-card${warehouse.expanded ? '' : ' is-collapsed'}`}
+                className={`donation-warehouse-card${warehouse.expanded ? ' is-active' : ' is-collapsed'}`}
                 key={warehouse.id}
               >
                 <header className="donation-warehouse-card-header">
-                  <button
-                    className="donation-warehouse-toggle"
-                    type="button"
-                    onClick={() => updateWarehouse(warehouse.id, (current) => ({
-                      ...current,
-                      expanded: !current.expanded,
-                    }))}
-                    aria-expanded={warehouse.expanded}
-                    aria-controls={contentId}
-                  >
+                  <div className="donation-warehouse-heading">
                     <span className="donation-warehouse-number">{warehouseIndex + 1}</span>
-                    <span>
-                      <strong>Almacén {warehouseIndex + 1}</strong>
-                      <small>{warehouse.products.length} producto{warehouse.products.length === 1 ? '' : 's'}</small>
+                    <span className="donation-warehouse-identity">
+                      <strong>{warehouse.warehouseName.trim() || `Almacén ${warehouseIndex + 1}`}</strong>
+                      <small>
+                        Proveedor: {warehouse.supplierName.trim() || 'No indicado'}
+                      </small>
                     </span>
-                    <span className="donation-warehouse-chevron" aria-hidden="true">⌄</span>
-                  </button>
-                  <button
-                    className="donation-warehouse-remove"
-                    type="button"
-                    onClick={() => removeWarehouse(warehouse)}
-                    disabled={disabled}
-                    aria-label={`Eliminar almacén ${warehouseIndex + 1}`}
-                  >
-                    Eliminar
-                  </button>
+                  </div>
+                  <div className="donation-warehouse-header-tools">
+                    <strong className="donation-warehouse-header-total">{formatUsd(warehouseTotal)}</strong>
+                    <button
+                      className="donation-warehouse-toggle"
+                      type="button"
+                      onClick={() => updateWarehouse(warehouse.id, (current) => ({
+                        ...current,
+                        expanded: !current.expanded,
+                      }))}
+                      aria-expanded={warehouse.expanded}
+                      aria-controls={contentId}
+                    >
+                      {warehouse.expanded ? 'Contraer' : 'Expandir'}
+                    </button>
+                    <button
+                      className="donation-warehouse-header-add"
+                      type="button"
+                      onClick={() => addProduct(warehouse.id)}
+                      disabled={disabled}
+                    >
+                      ＋ Agregar producto a este grupo
+                    </button>
+                    <button
+                      className="donation-warehouse-remove"
+                      type="button"
+                      onClick={() => removeWarehouse(warehouse)}
+                      disabled={disabled}
+                      aria-label={`Eliminar almacén ${warehouseIndex + 1}`}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
                 </header>
 
-                <div className="donation-warehouse-card-content" id={contentId}>
+                <div
+                  className="donation-warehouse-card-content"
+                  id={contentId}
+                  aria-hidden={!warehouse.expanded}
+                  inert={!warehouse.expanded}
+                >
                   <div className="donation-warehouse-card-content-inner">
                     <div className="donation-warehouse-fields">
                       <div className="donation-field">
-                        <label htmlFor={`${warehouse.id}-warehouse`}>Seleccionar almacén</label>
-                        <FormSelect
+                        <label htmlFor={`${warehouse.id}-warehouse`}>Nombre de almacén</label>
+                        <input
                           id={`${warehouse.id}-warehouse`}
-                          value={warehouse.warehouseId}
-                          options={warehouses.map((item) => ({ value: item.id, label: item.nombre }))}
-                          onChange={(warehouseId) => updateWarehouse(warehouse.id, (current) => ({
+                          value={warehouse.warehouseName}
+                          onChange={(event) => updateWarehouse(warehouse.id, (current) => ({
                             ...current,
-                            warehouseId,
+                            warehouseName: event.target.value,
                           }))}
-                          placeholder="Seleccione un almacén"
-                          searchable
                           disabled={disabled}
-                          loading={warehousesLoading}
-                          error={warehousesError}
-                          onRetry={onRetryWarehouses}
+                          maxLength={300}
+                          placeholder="Ingrese el nombre del almacén"
                         />
                       </div>
 
                       <div className="donation-field">
-                        <label htmlFor={`${warehouse.id}-supplier`}>Seleccionar proveedor</label>
-                        <FormSelect
+                        <label htmlFor={`${warehouse.id}-supplier`}>Nombre del proveedor</label>
+                        <input
                           id={`${warehouse.id}-supplier`}
-                          value={warehouse.supplierId}
-                          options={[]}
-                          onChange={() => undefined}
-                          placeholder="Catálogo no disponible"
-                          disabled
+                          value={warehouse.supplierName}
+                          onChange={(event) => updateWarehouse(warehouse.id, (current) => ({
+                            ...current,
+                            supplierName: event.target.value,
+                          }))}
+                          disabled={disabled}
+                          maxLength={300}
+                          placeholder="Ingrese el nombre del proveedor"
                         />
-                        <small className="donation-warehouse-catalog-note">
-                          Catálogo de proveedores pendiente de integración.
-                        </small>
                       </div>
 
                       <div className="donation-field">
@@ -288,117 +426,76 @@ function DonationWarehousesSection({
                     <section className="donation-products" aria-labelledby={`${warehouse.id}-products-title`}>
                       <div className="donation-products-heading">
                         <div>
-                          <h5 id={`${warehouse.id}-products-title`}>Productos</h5>
+                          <h5 id={`${warehouse.id}-products-title`}>Productos asociados</h5>
                           <p>Agregue los productos asociados exclusivamente a este almacén.</p>
                         </div>
-                        <button
-                          className="modal-secondary-button"
-                          type="button"
-                          onClick={() => addProduct(warehouse.id)}
-                          disabled={disabled}
-                        >
-                          Agregar producto
-                        </button>
                       </div>
 
                       {warehouse.products.length === 0 ? (
-                        <p className="donation-products-empty">Aún no hay productos en este almacén.</p>
+                        <p className="donation-products-empty">
+                          Aún no hay productos registrados para este almacén.
+                        </p>
                       ) : (
                         <ol className="donation-product-list">
                           {warehouse.products.map((product, productIndex) => {
-                            const availableProducts = product.brandId
-                              ? products.filter((item) => item.brandId === product.brandId)
-                              : []
-                            const selectedBrand = brands.find((item) => item.id === product.brandId)
-                            const selectedProduct = products.find((item) => item.id === product.productId)
                             const total = calculateProductTotal(product)
 
                             return (
-                              <li className="donation-product-card" key={product.id}>
-                                <header className="donation-product-card-header">
-                                  <span className="donation-product-number">{productIndex + 1}</span>
-                                  <span>
-                                    <strong>{selectedProduct?.nombre ?? `Producto ${productIndex + 1}`}</strong>
-                                    <small>{selectedBrand?.nombre ?? 'Marca sin seleccionar'}</small>
-                                  </span>
-                                  <div className="donation-product-actions">
-                                    <button
-                                      type="button"
-                                      onClick={() => updateProduct(
+                              <li
+                                className={`donation-product-row${product.editing ? ' is-editing' : ''}`}
+                                key={product.id}
+                              >
+                                <div className="donation-product-main">
+                                  {product.editing ? (
+                                    <div className="donation-product-main-fields">
+                                      <div className="donation-field">
+                                        <label htmlFor={`${product.id}-product`}>Producto</label>
+                                        <input
+                                          id={`${product.id}-product`}
+                                          value={product.productName}
+                                          onChange={(event) => updateProduct(
+                                            warehouse.id,
+                                            product.id,
+                                            (current) => ({ ...current, productName: event.target.value }),
+                                          )}
+                                          maxLength={500}
+                                          disabled={disabled}
+                                          placeholder="Nombre del producto"
+                                        />
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <span className="donation-product-identity">
+                                      <strong>{product.productName || `Producto ${productIndex + 1}`}</strong>
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="donation-product-cell donation-product-brand">
+                                  <span>Marca</span>
+                                  {product.editing ? (
+                                    <input
+                                      id={`${product.id}-brand`}
+                                      aria-label="Marca"
+                                      value={product.brandName}
+                                      onChange={(event) => updateProduct(
                                         warehouse.id,
                                         product.id,
-                                        (current) => ({ ...current, editing: !current.editing }),
+                                        (current) => ({ ...current, brandName: event.target.value }),
                                       )}
+                                      maxLength={300}
                                       disabled={disabled}
-                                    >
-                                      {product.editing ? 'Listo' : 'Editar'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => removeProduct(warehouse.id, product.id)}
-                                      disabled={disabled}
-                                      aria-label={`Quitar producto ${productIndex + 1} del almacén ${warehouseIndex + 1}`}
-                                    >
-                                      Quitar
-                                    </button>
-                                  </div>
-                                </header>
+                                      placeholder="Marca"
+                                    />
+                                  ) : <strong>{product.brandName || 'Sin indicar'}</strong>}
+                                </div>
 
-                                {product.editing ? (
-                                  <div className="donation-product-fields">
-                                    <div className="donation-field">
-                                      <label htmlFor={`${product.id}-brand`}>Marcas disponibles</label>
-                                      <FormSelect
-                                        id={`${product.id}-brand`}
-                                        value={product.brandId}
-                                        options={brands.map((item) => ({ value: item.id, label: item.nombre }))}
-                                        onChange={(brandId) => updateProduct(
-                                          warehouse.id,
-                                          product.id,
-                                          (current) => ({ ...current, brandId, productId: '' }),
-                                        )}
-                                        placeholder={brands.length ? 'Seleccione una marca' : 'Sin marcas disponibles'}
-                                        disabled={disabled || brands.length === 0}
-                                      />
-                                      {brands.length === 0 && (
-                                        <small className="donation-product-catalog-note">
-                                          Catálogo de marcas pendiente de integración.
-                                        </small>
-                                      )}
-                                    </div>
-
-                                    <div className="donation-field">
-                                      <label htmlFor={`${product.id}-product`}>Productos disponibles</label>
-                                      <FormSelect
-                                        id={`${product.id}-product`}
-                                        value={product.productId}
-                                        options={availableProducts.map((item) => ({
-                                          value: item.id,
-                                          label: item.nombre,
-                                        }))}
-                                        onChange={(productId) => updateProduct(
-                                          warehouse.id,
-                                          product.id,
-                                          (current) => ({ ...current, productId }),
-                                        )}
-                                        placeholder={product.brandId
-                                          ? 'Sin productos disponibles'
-                                          : 'Seleccione primero una marca'}
-                                        searchable
-                                        noResultsText="Sin coincidencias"
-                                        disabled={disabled || !product.brandId || availableProducts.length === 0}
-                                      />
-                                      {products.length === 0 && (
-                                        <small className="donation-product-catalog-note">
-                                          Catálogo de productos pendiente de integración.
-                                        </small>
-                                      )}
-                                    </div>
-
-                                    <div className="donation-field">
-                                      <label htmlFor={`${product.id}-quantity`}>Cantidad</label>
+                                <div className="donation-product-cell donation-product-quantity">
+                                  <span>Cantidad</span>
+                                  {product.editing ? (
                                       <input
                                         id={`${product.id}-quantity`}
+                                        aria-label="Cantidad"
                                         type="number"
                                         min="0"
                                         step="1"
@@ -416,14 +513,17 @@ function DonationWarehousesSection({
                                         disabled={disabled}
                                         placeholder="0"
                                       />
-                                    </div>
+                                  ) : <strong>{product.quantity || '0'}</strong>}
+                                </div>
 
-                                    <div className="donation-field">
-                                      <label htmlFor={`${product.id}-unit-price`}>Precio unitario</label>
+                                <div className="donation-product-cell">
+                                  <span>Precio unitario</span>
+                                  {product.editing ? (
                                       <div className="donation-money-input">
                                         <span aria-hidden="true">$</span>
                                         <input
                                           id={`${product.id}-unit-price`}
+                                          aria-label="Precio unitario"
                                           type="number"
                                           min="0"
                                           step="0.01"
@@ -449,30 +549,53 @@ function DonationWarehousesSection({
                                           placeholder="0.00"
                                         />
                                       </div>
-                                    </div>
+                                  ) : <strong>{formatUsd(multiplyToCents('1', product.unitPrice))}</strong>}
+                                </div>
 
-                                    <div className="donation-field donation-product-total">
-                                      <label htmlFor={`${product.id}-total`}>Total</label>
-                                      <input
-                                        id={`${product.id}-total`}
-                                        value={formatUsd(total)}
-                                        readOnly
-                                        aria-readonly="true"
-                                      />
-                                    </div>
+                                <div className="donation-product-cell donation-product-row-total">
+                                  <span>Total</span>
+                                  <strong>{formatUsd(total)}</strong>
+                                </div>
+
+                                <div className="donation-product-row-actions">
+                                  <span>Acciones</span>
+                                  <div>
+                                    <button
+                                      type="button"
+                                      className={`donation-product-action-button ${product.editing ? 'is-confirm' : 'is-edit'}`}
+                                      onClick={() => updateProduct(
+                                        warehouse.id,
+                                        product.id,
+                                        (current) => ({ ...current, editing: !current.editing }),
+                                      )}
+                                      disabled={disabled}
+                                      aria-label={product.editing ? 'Finalizar edición del producto' : 'Editar producto'}
+                                      title={product.editing ? 'Listo' : 'Editar producto'}
+                                    >
+                                      {product.editing ? <CheckIcon /> : <PencilIcon />}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="donation-product-action-button is-remove"
+                                      onClick={() => removeProduct(warehouse.id, product.id)}
+                                      disabled={disabled}
+                                      aria-label="Quitar producto"
+                                      title="Quitar producto"
+                                    >
+                                      <TrashIcon />
+                                    </button>
                                   </div>
-                                ) : (
-                                  <dl className="donation-product-summary">
-                                    <div><dt>Cantidad</dt><dd>{product.quantity || '0'}</dd></div>
-                                    <div><dt>Precio unitario</dt><dd>{formatUsd(Number(product.unitPrice) || 0)}</dd></div>
-                                    <div><dt>Total</dt><dd>{formatUsd(total)}</dd></div>
-                                  </dl>
-                                )}
+                                </div>
                               </li>
                             )
                           })}
                         </ol>
                       )}
+
+                      <div className="donation-warehouse-total" aria-live="polite">
+                        <span>Total del almacén</span>
+                        <strong>{formatUsd(warehouseTotal)}</strong>
+                      </div>
                     </section>
                   </div>
                 </div>
@@ -481,6 +604,14 @@ function DonationWarehousesSection({
           })}
         </div>
       )}
+
+      <div className="donation-grand-total" aria-live="polite">
+        <span>
+          <small>Resumen de la Sección 6</small>
+          <strong>Total general de la donación</strong>
+        </span>
+        <b>{formatUsd(donationTotal)}</b>
+      </div>
     </div>
   )
 }

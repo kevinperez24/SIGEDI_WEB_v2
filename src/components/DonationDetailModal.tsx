@@ -1,11 +1,14 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
 import {
   createDonationActa,
+  createDonationIncome,
+  deleteDonationIncome,
   deleteDonationDocument,
   getCities,
   getConapinaReceptionManagers,
   getDestinationWarehouses,
   getDonationDetail,
+  getDonationIncomes,
   getDonationActa,
   getDonationDocument,
   getDistributionPlaces,
@@ -13,6 +16,7 @@ import {
   getSafekeepingWarehouses,
   getUpcRepresentatives,
   updateDonation,
+  updateDonationIncome,
   uploadDonationDocument,
 } from '../services/donations'
 import type {
@@ -35,7 +39,10 @@ import DonationSectionNavigator, {
   type DonationSectionNumber,
 } from './DonationSectionNavigator'
 import DonationWarehousesSection, {
+  donationIncomeToDraft,
+  donationWarehouseToInput,
   type DonationWarehouseDraft,
+  validateDonationWarehouses,
 } from './DonationWarehousesSection'
 import '../pages/DonativoMonetarioForm.css'
 import './DonationDraftModal.css'
@@ -174,6 +181,7 @@ function DonationDetailModal({
   >({})
   const [activeSection, setActiveSection] = useState<DonationSectionNumber>(1)
   const [warehouseGroups, setWarehouseGroups] = useState<DonationWarehouseDraft[]>([])
+  const [originalWarehouseGroups, setOriginalWarehouseGroups] = useState<DonationWarehouseDraft[]>([])
   const [invalidSections, setInvalidSections] = useState<Set<DonationSectionNumber>>(new Set())
   const [isEditing, setIsEditing] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -209,11 +217,17 @@ function DonationDetailModal({
     setMessage('')
     setHasError(false)
     try {
-      const result = await getDonationDetail(donationId, authToken)
+      const [result, incomes] = await Promise.all([
+        getDonationDetail(donationId, authToken),
+        getDonationIncomes(donationId, authToken),
+      ])
       setDetail(result.donativo)
       setDocuments(result.documentos)
       setActiveActa(result.acta)
       setForm(toForm(result.donativo))
+      const incomeDrafts = incomes.map((income) => donationIncomeToDraft(income, false))
+      setWarehouseGroups(incomeDrafts)
+      setOriginalWarehouseGroups(incomeDrafts)
     } catch {
       setHasError(true)
       setMessage('No fue posible cargar el donativo.')
@@ -339,7 +353,10 @@ function DonationDetailModal({
 
   const cancelEditing = () => {
     if (detail) setForm(toForm(detail))
-    setWarehouseGroups([])
+    setWarehouseGroups(originalWarehouseGroups.map((warehouse) => ({
+      ...warehouse,
+      products: warehouse.products.map((product) => ({ ...product })),
+    })))
     setPendingDocuments({})
     setInvalidSections(new Set())
     setMessage('')
@@ -430,11 +447,13 @@ function DonationDetailModal({
     if (form.dui_donante !== '' && !DUI_PATTERN.test(form.dui_donante)) {
       nextInvalidSections.add(8)
     }
+    const incomeValidationError = validateDonationWarehouses(warehouseGroups)
+    if (incomeValidationError) nextInvalidSections.add(6)
     if (nextInvalidSections.size > 0) {
       setInvalidSections(nextInvalidSections)
-      setActiveSection(nextInvalidSections.has(1) ? 1 : 8)
+      setActiveSection(nextInvalidSections.has(1) ? 1 : nextInvalidSections.has(6) ? 6 : 8)
       setHasError(true)
-      setMessage('Revise los campos requeridos antes de continuar.')
+      setMessage(incomeValidationError ?? 'Revise los campos requeridos antes de continuar.')
       return
     }
 
@@ -443,6 +462,34 @@ function DonationDetailModal({
     setHasError(false)
     try {
       await updateDonation(donationId, form, authToken)
+      const currentIncomeIds = new Set(
+        warehouseGroups.flatMap((warehouse) => warehouse.recordId ? [warehouse.recordId] : []),
+      )
+      for (const originalWarehouse of originalWarehouseGroups) {
+        if (originalWarehouse.recordId && !currentIncomeIds.has(originalWarehouse.recordId)) {
+          await deleteDonationIncome(donationId, originalWarehouse.recordId, authToken)
+          setOriginalWarehouseGroups((current) => current.filter(
+            (warehouse) => warehouse.recordId !== originalWarehouse.recordId,
+          ))
+        }
+      }
+      const persistedWarehouses = [...warehouseGroups]
+      for (const [index, warehouse] of warehouseGroups.entries()) {
+        const input = donationWarehouseToInput(warehouse)
+        const income = warehouse.recordId
+          ? await updateDonationIncome(donationId, warehouse.recordId, input, authToken)
+          : await createDonationIncome(donationId, input, authToken)
+        const persistedWarehouse = donationIncomeToDraft(income, false)
+        persistedWarehouses[index] = persistedWarehouse
+        setWarehouseGroups([...persistedWarehouses])
+        setOriginalWarehouseGroups((current) => {
+          const existingIndex = current.findIndex((item) => item.recordId === income.id)
+          if (existingIndex < 0) return [...current, persistedWarehouse]
+          return current.map((item, itemIndex) => (
+            itemIndex === existingIndex ? persistedWarehouse : item
+          ))
+        })
+      }
       for (const [type, file] of Object.entries(pendingDocuments) as [
         DonationDocumentType,
         File,
@@ -948,12 +995,8 @@ function DonationDetailModal({
 
                   <DonationWarehousesSection
                     value={warehouseGroups}
-                    warehouses={availableSafekeepingWarehouses}
                     onChange={setWarehouseGroups}
                     disabled={!isEditing || isSaving}
-                    warehousesLoading={isEditing && isSafekeepingWarehousesLoading}
-                    warehousesError={isEditing ? safekeepingWarehousesError : ''}
-                    onRetryWarehouses={() => void loadSafekeepingWarehouses()}
                   />
                 </section>
 

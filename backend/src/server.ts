@@ -20,6 +20,8 @@ import { DonationDocumentService } from './donativos/donativo-document.service.t
 import { SurrealDonationDocumentRepository } from './donativos/donativo-document.repository.ts'
 import { DonationActaService } from './donativos/donativo-acta.service.ts'
 import { SurrealDonationActaRepository } from './donativos/donativo-acta.repository.ts'
+import { DonationIncomeService } from './donativos/donativo-income.service.ts'
+import { SurrealDonationIncomeRepository } from './donativos/donativo-income.repository.ts'
 import { createRequestHandler } from './http/app.ts'
 
 const config = getConfig()
@@ -32,6 +34,9 @@ const donationDocumentService = new DonationDocumentService(
 const donationActaService = new DonationActaService(
   new SurrealDonationActaRepository(),
   (donativoId) => donationService.findById(donativoId),
+)
+const donationIncomeService = new DonationIncomeService(
+  new SurrealDonationIncomeRepository(),
 )
 const receptionPlaceCatalogRepository = new ReceptionPlaceCatalogRepository()
 const upcRepresentativeCatalogRepository = new UpcRepresentativeCatalogRepository()
@@ -79,6 +84,13 @@ const server = createServer(
     listConapinaReceptionManagers: () => conapinaReceptionManagerRepository.list(),
     findConapinaReceptionManager: (id) => conapinaReceptionManagerRepository.findById(id),
     deleteDonation: (donativoId) => donationService.delete(donativoId),
+    createDonationIncome: (donativoId, createdBy, input) =>
+      donationIncomeService.create(donativoId, createdBy, input),
+    listDonationIncomes: (donativoId) => donationIncomeService.list(donativoId),
+    updateDonationIncome: (donativoId, incomeId, updatedBy, input) =>
+      donationIncomeService.update(donativoId, incomeId, updatedBy, input),
+    deleteDonationIncome: (donativoId, incomeId) =>
+      donationIncomeService.delete(donativoId, incomeId),
   }),
 )
 

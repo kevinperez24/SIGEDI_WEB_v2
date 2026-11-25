@@ -11,6 +11,33 @@
   gap: 16px;
 }
 
+.donation-warehouses-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 17px 18px;
+  border: 1px solid var(--conapina-border);
+  border-radius: 12px;
+  background: var(--conapina-white);
+  box-shadow: 0 5px 16px rgb(7 59 87 / 5%);
+}
+
+.donation-warehouses-section-number {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--conapina-blue-soft);
+  color: var(--conapina-blue);
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.donation-warehouses-toolbar-copy {
+  min-width: 0;
+}
+
 .donation-warehouses-toolbar h4,
 .donation-products-heading h5 {
   margin: 0;
@@ -28,6 +55,14 @@
 
 .donation-warehouse-add {
   flex: 0 0 auto;
+  border: 1px solid var(--conapina-blue);
+  background: var(--conapina-white);
+  color: var(--conapina-blue);
+  box-shadow: none;
+}
+
+.donation-warehouse-add:hover:not(:disabled) {
+  background: var(--conapina-blue-soft);
 }
 
 .donation-warehouses-notice {
@@ -58,25 +93,35 @@
 
 .donation-warehouse-list {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 .donation-warehouse-card {
-  overflow: hidden;
+  container-type: inline-size;
   border: 1px solid var(--conapina-border);
   border-radius: 12px;
   background: var(--conapina-white);
   box-shadow: 0 5px 16px rgb(7 59 87 / 6%);
+  transition: border-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.donation-warehouse-card.is-active {
+  border-color: var(--conapina-blue);
+  box-shadow: 0 8px 22px rgb(7 59 87 / 10%);
 }
 
 .donation-warehouse-card-header {
   display: flex;
   align-items: stretch;
   gap: 8px;
-  min-height: 58px;
-  padding: 7px 9px;
+  min-height: 68px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--conapina-border);
   background: var(--conapina-blue-soft);
+}
+
+.donation-warehouse-card.is-collapsed .donation-warehouse-card-header {
+  background: var(--conapina-white);
 }
 
 .donation-warehouse-card.is-collapsed .donation-warehouse-card-header {
@@ -84,31 +129,98 @@
 }
 
 .donation-warehouse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 33px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--conapina-blue-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: background-color 170ms ease-out, color 170ms ease-out;
+}
+
+.donation-warehouse-toggle::after {
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  content: '';
+  transform: rotate(225deg) translate(-1px, -1px);
+  transition: transform 170ms ease-out;
+}
+
+.donation-warehouse-card.is-collapsed .donation-warehouse-toggle::after {
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.donation-warehouse-toggle:hover:not(:disabled) {
+  background: var(--conapina-blue-soft);
+}
+
+.donation-warehouse-heading {
   display: flex;
-  flex: 1;
+  flex: 1 1 300px;
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 4px;
-  border: 0;
-  background: transparent;
+}
+
+.donation-warehouse-header-tools {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.donation-warehouse-header-total {
   color: var(--conapina-navy);
-  text-align: left;
+  font-size: 15px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.donation-warehouse-header-add {
+  padding: 8px 11px;
+  border: 1px solid var(--conapina-blue);
+  border-radius: 8px;
+  background: var(--conapina-white);
+  color: var(--conapina-blue);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.donation-warehouse-toggle > span:nth-child(2) {
+.donation-warehouse-header-add:hover:not(:disabled) {
+  background: var(--conapina-blue-soft);
+}
+
+.donation-warehouse-identity {
   display: grid;
+  flex: 1;
   min-width: 0;
 }
 
-.donation-warehouse-toggle small {
+.donation-warehouse-identity strong {
+  overflow-wrap: anywhere;
+}
+
+.donation-warehouse-identity small {
   color: var(--conapina-text-secondary);
   font-size: 11px;
 }
 
-.donation-warehouse-number,
-.donation-product-number {
+.donation-warehouse-number {
   display: inline-grid;
   flex: 0 0 auto;
   width: 30px;
@@ -121,22 +233,10 @@
   font-weight: 900;
 }
 
-.donation-warehouse-chevron {
-  margin-left: auto;
-  font-size: 22px;
-  line-height: 1;
-  transform: rotate(180deg);
-  transition: transform 180ms ease-out;
-}
-
-.donation-warehouse-card.is-collapsed .donation-warehouse-chevron {
-  transform: rotate(0deg);
-}
-
 .donation-warehouse-remove {
   align-self: center;
-  padding: 8px 11px;
-  border: 1px solid #e7b5ba;
+  padding: 7px 5px;
+  border: 0;
   border-radius: 9px;
   background: var(--conapina-white);
   color: var(--conapina-error);
@@ -147,6 +247,7 @@
 }
 
 .donation-warehouse-remove:disabled,
+.donation-warehouse-header-add:disabled,
 .donation-product-list button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -165,6 +266,12 @@
 .donation-warehouse-card-content-inner {
   min-height: 0;
   overflow: hidden;
+  opacity: 1;
+  transition: opacity 160ms ease-out;
+}
+
+.donation-warehouse-card.is-collapsed .donation-warehouse-card-content-inner {
+  opacity: 0;
 }
 
 .donation-warehouse-fields {
@@ -180,11 +287,17 @@
 }
 
 .donation-products {
+  min-width: 0;
   margin: 0 16px 16px;
-  padding: 14px;
+  padding: 0;
   border: 1px solid var(--conapina-border);
   border-radius: 10px;
-  background: var(--conapina-background);
+  background: var(--conapina-white);
+}
+
+.donation-products-heading {
+  padding: 12px 14px;
+  background: var(--conapina-surface);
 }
 
 .donation-products-heading h5 {
@@ -192,10 +305,10 @@
 }
 
 .donation-products-empty {
-  margin: 12px 0 0;
-  padding: 14px;
-  border: 1px dashed #b8ced8;
-  border-radius: 9px;
+  margin: 0;
+  padding: 18px 14px;
+  border-top: 1px dashed #b8ced8;
+  border-radius: 0;
   color: var(--conapina-text-secondary);
   font-size: 12px;
   text-align: center;
@@ -203,26 +316,40 @@
 
 .donation-product-list {
   display: grid;
-  gap: 8px;
-  margin: 12px 0 0;
+  min-width: 0;
+  gap: 0;
+  margin: 0;
   padding: 0;
+  border-top: 1px solid var(--conapina-border);
   list-style: none;
 }
 
 .donation-product-card {
   overflow: hidden;
-  border: 1px solid var(--conapina-border);
-  border-radius: 10px;
+  border: 0;
+  border-bottom: 1px solid var(--conapina-border);
+  border-radius: 0;
   background: var(--conapina-white);
+  box-shadow: none;
+}
+
+.donation-product-card:last-child {
+  border-bottom: 0;
+}
+
+.donation-product-card.is-summary {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.15fr) minmax(360px, 1fr);
+  align-items: stretch;
 }
 
 .donation-product-card-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--conapina-border);
-  background: #f9fcfd;
+  padding: 13px 16px;
+  border-bottom: 0;
+  background: var(--conapina-white);
 }
 
 .donation-product-card-header > span:nth-child(2) {
@@ -261,7 +388,8 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 13px;
-  padding: 14px;
+  padding: 14px 16px 16px;
+  border-top: 1px solid var(--conapina-border);
 }
 
 .donation-product-catalog-note {
@@ -284,8 +412,10 @@
   pointer-events: none;
 }
 
-.donation-money-input input {
-  padding-left: 29px;
+.donation-field .donation-money-input input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: 40px;
 }
 
 .donation-product-total input[readonly] {
@@ -296,18 +426,20 @@
 
 .donation-product-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, minmax(105px, 1fr)) auto;
+  gap: 0;
   margin: 0;
-  padding: 12px 14px;
+  padding: 0;
 }
 
 .donation-product-summary div {
   display: grid;
   gap: 2px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--conapina-background);
+  align-content: center;
+  padding: 12px 13px;
+  border-left: 1px solid var(--conapina-border);
+  border-radius: 0;
+  background: var(--conapina-white);
 }
 
 .donation-product-summary dt {
@@ -324,22 +456,351 @@
   font-weight: 900;
 }
 
+.donation-product-summary-actions {
+  min-width: 118px;
+}
+
+.donation-product-summary-actions dd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.donation-product-summary-actions button {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--conapina-blue-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.donation-product-summary-actions button:last-child {
+  color: var(--conapina-error);
+}
+
+.donation-product-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 2fr)
+    minmax(0, 1fr)
+    minmax(0, 0.9fr)
+    minmax(0, 1.1fr)
+    minmax(0, 1.1fr)
+    minmax(110px, 0.9fr);
+  width: 100%;
+  align-items: stretch;
+  border-bottom: 1px solid var(--conapina-border);
+  background: var(--conapina-white);
+}
+
+.donation-product-row,
+.donation-product-row > * {
+  box-sizing: border-box;
+}
+
+.donation-product-row:last-child {
+  border-bottom: 0;
+}
+
+.donation-product-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px 16px;
+}
+
+.donation-product-identity {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.donation-product-identity strong,
+.donation-product-identity small {
+  overflow-wrap: anywhere;
+}
+
+.donation-product-identity strong {
+  color: var(--conapina-navy);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.donation-product-identity small {
+  color: var(--conapina-text-secondary);
+  font-size: 11px;
+}
+
+.donation-product-main-fields {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+}
+
+.donation-product-main-fields .donation-field {
+  gap: 4px;
+}
+
+.donation-product-cell,
+.donation-product-row-actions {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px 13px;
+  border-left: 1px solid var(--conapina-border);
+}
+
+.donation-product-row-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.donation-product-cell > span,
+.donation-product-row-actions > span {
+  color: var(--conapina-text-secondary);
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.donation-product-cell > strong {
+  color: var(--conapina-navy);
+  font-size: 13px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.donation-product-row:not(.is-editing) .donation-product-cell {
+  justify-items: center;
+  text-align: center;
+}
+
+.donation-product-row input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  box-sizing: border-box;
+  border: 1px solid var(--conapina-border);
+  border-radius: 8px;
+  background: var(--conapina-white);
+  color: var(--conapina-text);
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.donation-product-row input:focus {
+  border-color: var(--conapina-focus);
+  outline: 3px solid rgb(21 145 191 / 18%);
+}
+
+.donation-product-cell .donation-money-input input {
+  padding-left: 38px;
+}
+
+.donation-product-row-actions > div {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.donation-product-action-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--conapina-blue-secondary);
+  cursor: pointer;
+  transition:
+    background-color 170ms ease-out,
+    border-color 170ms ease-out,
+    color 170ms ease-out;
+}
+
+.donation-product-action-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.donation-product-action-button:is(.is-edit, .is-confirm):hover:not(:disabled) {
+  border-color: var(--conapina-border);
+  background: var(--conapina-blue-soft);
+}
+
+.donation-product-action-button.is-remove {
+  color: var(--conapina-error);
+}
+
+.donation-product-action-button.is-remove:hover:not(:disabled) {
+  border-color: rgb(189 60 69 / 25%);
+  background: rgb(189 60 69 / 10%);
+}
+
+.donation-product-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@container (max-width: 760px) {
+  .donation-warehouse-card-header,
+  .donation-warehouse-header-tools {
+    flex-wrap: wrap;
+  }
+
+  .donation-warehouse-header-tools {
+    width: 100%;
+    padding-left: 40px;
+  }
+
+  .donation-product-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .donation-product-main,
+  .donation-product-row-actions {
+    grid-column: 1 / -1;
+  }
+
+  .donation-product-cell {
+    border-top: 1px solid var(--conapina-border);
+  }
+
+  .donation-product-row > .donation-product-cell:nth-child(2n),
+  .donation-product-row-actions {
+    border-left: 0;
+  }
+
+  .donation-product-row-actions {
+    border-top: 1px solid var(--conapina-border);
+  }
+
+}
+
+.donation-warehouse-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 0;
+  padding: 12px 16px;
+  border-top: 1px solid var(--conapina-border);
+  color: var(--conapina-navy);
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--conapina-surface);
+}
+
+.donation-warehouse-total strong {
+  font-size: 15px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.donation-grand-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 17px 18px;
+  border: 1px solid var(--conapina-border);
+  border-radius: 12px;
+  background: var(--conapina-white);
+  color: var(--conapina-navy);
+  box-shadow: 0 6px 18px rgb(7 59 87 / 7%);
+}
+
+.donation-grand-total > span {
+  display: grid;
+  gap: 2px;
+}
+
+.donation-grand-total small {
+  color: var(--conapina-text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.donation-grand-total strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.donation-grand-total > b {
+  flex: 0 0 auto;
+  font-size: 19px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
 .donation-warehouse-toggle:focus-visible,
+.donation-warehouse-header-add:focus-visible,
 .donation-warehouse-remove:focus-visible,
-.donation-product-actions button:focus-visible {
-  outline: 3px solid rgb(21 145 191 / 28%);
+.donation-product-actions button:focus-visible,
+.donation-product-summary-actions button:focus-visible,
+.donation-product-row-actions button:focus-visible {
+  outline: 2px solid var(--conapina-focus);
   outline-offset: 2px;
 }
 
+@media (max-width: 1050px) {
+  .donation-warehouse-card-header,
+  .donation-warehouse-header-tools {
+    flex-wrap: wrap;
+  }
+
+  .donation-warehouse-header-tools {
+    width: 100%;
+    padding-left: 44px;
+  }
+
+  .donation-product-card.is-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .donation-product-summary {
+    border-top: 1px solid var(--conapina-border);
+  }
+
+  .donation-product-summary div:first-child {
+    border-left: 0;
+  }
+
+}
+
 @media (max-width: 680px) {
-  .donation-warehouses-toolbar,
+  .donation-warehouses-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 14px;
+  }
+
   .donation-products-heading {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .donation-warehouse-add,
-  .donation-products-heading .modal-secondary-button {
+  .donation-warehouse-add {
+    grid-column: 1 / -1;
     width: 100%;
   }
 
@@ -351,6 +812,39 @@
   .donation-product-fields,
   .donation-product-summary {
     grid-template-columns: 1fr;
+  }
+
+  .donation-product-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .donation-product-main,
+  .donation-product-row-actions {
+    grid-column: 1 / -1;
+  }
+
+  .donation-product-main {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .donation-product-main-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .donation-product-cell {
+    padding: 10px;
+    border-top: 1px solid var(--conapina-border);
+  }
+
+  .donation-product-main + .donation-product-cell {
+    border-left: 0;
+  }
+
+  .donation-product-row-actions {
+    padding: 9px 12px;
+    border-top: 1px solid var(--conapina-border);
+    border-left: 0;
   }
 
   .donation-product-card-header {
@@ -370,16 +864,51 @@
 
   .donation-warehouse-card-header {
     flex-wrap: wrap;
+    padding: 10px;
+  }
+
+  .donation-warehouse-toggle-label {
+    display: none;
+  }
+
+  .donation-warehouse-header-tools {
+    justify-content: flex-start;
+    padding-left: 40px;
+  }
+
+  .donation-warehouse-header-add {
+    order: 3;
+    width: 100%;
   }
 
   .donation-warehouse-remove {
-    margin-left: 44px;
+    margin-left: auto;
+  }
+
+  .donation-product-summary div {
+    border-top: 1px solid var(--conapina-border);
+    border-left: 0;
+  }
+
+  .donation-product-summary div:first-child {
+    border-top: 0;
+  }
+
+  .donation-grand-total {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .donation-grand-total > b {
+    align-self: flex-end;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .donation-warehouse-card-content,
-  .donation-warehouse-chevron {
+  .donation-warehouse-card-content-inner,
+  .donation-warehouse-chevron,
+  .donation-warehouse-card {
     transition: none;
   }
 }

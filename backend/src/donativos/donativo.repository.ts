@@ -223,6 +223,9 @@ const PREPARE_DONATION_DELETION_QUERY = `
 
 const DELETE_DONATION_CASCADE_QUERY = `
   BEGIN TRANSACTION;
+  LET $income_ids = SELECT VALUE id FROM incomes WHERE donativo_id = $donativo_id;
+  DELETE detincomes WHERE income_id IN $income_ids;
+  DELETE incomes WHERE donativo_id = $donativo_id;
   DELETE donativo_documentos WHERE donativo_id = $donativo_id;
   DELETE $donativo_id;
   COMMIT TRANSACTION;

@@ -90,8 +90,10 @@ La implementación inicial aplica estos criterios únicamente al Login. Los toke
 
 - Registro usa `/donaciones/registro` y Consulta/Edición usa `/donaciones/detalle?id=<record-id>` dentro del shell autenticado. Los formularios principales dejaron de utilizar overlays modales.
 - Ambas páginas comparten un índice derecho con las 10 secciones oficiales, de la 1 a la 10.
-- La Sección 6, “Almacenes y Productos”, mantiene en memoria una relación frontend de múltiples almacenes y productos independientes. Reutiliza el catálogo autenticado de almacenes; el proveedor permanece deshabilitado con estado informativo hasta que exista un catálogo. Sus datos no forman parte de los payloads POST/PATCH actuales.
-- Cada producto conserva marca, producto filtrable, cantidad, precio unitario y total calculado. Mientras no existan catálogos de marcas y productos, sus selectores muestran estados vacíos informativos sin datos ficticios.
+- La Sección 6, “Almacenes y Productos”, representa la relación persistente `donativos → incomes → detincomes`. Cada bloque corresponde a una recepción física con productos independientes.
+- Los almacenes se presentan como tarjetas plegables con nombre, numeración y contador; cada tarjeta contiene una subárea de productos asociados con tarjetas compactas, resumen monetario y confirmación antes de eliminar datos ingresados.
+- Cada producto conserva marca, nombre, cantidad, precio unitario y total calculado. El total se presenta como solo lectura y vuelve a calcularse en backend antes de persistir.
+- Los totales derivados de cada almacén y de la donación completa se calculan en centavos, se actualizan con el estado del formulario y se presentan en formato USD; no agregan campos persistentes ni modifican el esquema.
 - En escritorio el índice ocupa entre 220 y 250 px y permanece sticky. En laptop y móvil se convierte en un selector accesible sobre el formulario.
 - El índice muestra progreso, sección activa y errores de validación confirmados. Cambiar de sección conserva estado, catálogos y archivos seleccionados.
 - Registro conserva creación y carga documental; tras un guardado completo actualiza el listado y vuelve a Donativos. Consulta conserva lectura, edición, cancelación sin PATCH, documentos y generación de actas.

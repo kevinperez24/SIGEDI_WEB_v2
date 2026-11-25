@@ -140,6 +140,34 @@ export type DonationActaSummary = {
   nombre_archivo: string
 }
 
+export type DonationIncomeProductInput = {
+  id?: string
+  brand_name: string
+  name_product: string
+  amount: number
+  price: number
+}
+
+export type DonationIncomeInput = {
+  nombre_almacen: string
+  nombre_proveedor: string
+  fecha_recepcion_donacion: string
+  description: string
+  productos: DonationIncomeProductInput[]
+}
+
+export type DonationIncomeProduct = Omit<DonationIncomeProductInput, 'id'> & {
+  id: string
+  income_id: string
+  total_price: number
+}
+
+export type DonationIncome = Omit<DonationIncomeInput, 'productos'> & {
+  id: string
+  donativo_id: string
+  productos: DonationIncomeProduct[]
+}
+
 export type DonationListItem = {
   id: string
   correlativo_acta: string | null
@@ -185,6 +213,14 @@ type DonationDeletionResponse =
   | { ok: true; message: string }
   | { ok: false; message: string }
 
+type DonationIncomeResponse =
+  | { ok: true; income: DonationIncome }
+  | { ok: false; message: string }
+
+type DonationIncomeListResponse =
+  | { ok: true; incomes: DonationIncome[] }
+  | { ok: false; message: string }
+
 type ReceptionPlaceCatalogResponse =
   | { ok: true; lugares: ReceptionPlace[] }
   | { ok: false; message: string }
@@ -215,6 +251,7 @@ export class DonationDocumentSaveError extends Error {}
 export class DonationDetailError extends Error {}
 export class DonationActaError extends Error {}
 export class DonationDeletionError extends Error {}
+export class DonationIncomeError extends Error {}
 export class ReceptionPlaceCatalogError extends Error {}
 export class UpcRepresentativeCatalogError extends Error {}
 export class Section5CatalogError extends Error {}
@@ -519,6 +556,92 @@ export async function updateDonation(
     )
   }
   return result.donativo
+}
+
+export async function getDonationIncomes(
+  donationId: string,
+  authToken: string,
+): Promise<DonationIncome[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/incomes`,
+    { headers: { Authorization: `Bearer ${authToken}` } },
+  ).catch(() => null)
+  if (!response) throw new DonationIncomeError('No fue posible cargar las recepciones.')
+  const result = (await response.json().catch(() => null)) as DonationIncomeListResponse | null
+  if (!response.ok || !result?.ok) {
+    throw new DonationIncomeError('No fue posible cargar las recepciones.')
+  }
+  return result.incomes
+}
+
+export async function createDonationIncome(
+  donationId: string,
+  input: DonationIncomeInput,
+  authToken: string,
+): Promise<DonationIncome> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/incomes`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(input),
+    },
+  ).catch(() => null)
+  const result = response
+    ? (await response.json().catch(() => null)) as DonationIncomeResponse | null
+    : null
+  if (!response?.ok || !result?.ok) {
+    throw new DonationIncomeError(
+      result && !result.ok ? result.message : 'No fue posible guardar la recepción.',
+    )
+  }
+  return result.income
+}
+
+export async function updateDonationIncome(
+  donationId: string,
+  incomeId: string,
+  input: DonationIncomeInput,
+  authToken: string,
+): Promise<DonationIncome> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/incomes/${encodeURIComponent(incomeId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(input),
+    },
+  ).catch(() => null)
+  const result = response
+    ? (await response.json().catch(() => null)) as DonationIncomeResponse | null
+    : null
+  if (!response?.ok || !result?.ok) {
+    throw new DonationIncomeError(
+      result && !result.ok ? result.message : 'No fue posible actualizar la recepción.',
+    )
+  }
+  return result.income
+}
+
+export async function deleteDonationIncome(
+  donationId: string,
+  incomeId: string,
+  authToken: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/incomes/${encodeURIComponent(incomeId)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    },
+  ).catch(() => null)
+  if (!response?.ok) throw new DonationIncomeError('No fue posible eliminar la recepción.')
 }
 
 export async function getDonationDocument(

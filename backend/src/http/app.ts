@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { DatabaseConnectionError } from '../database/errors.ts'
+import { DatabaseConnectionError, DatabaseQueryError } from '../database/errors.ts'
 import type { AuthResult } from '../auth/auth.types.ts'
 import type { ReceptionPlace } from '../catalogos/lugar-recepcion.repository.ts'
 import type { UpcRepresentative } from '../catalogos/representante-upc.repository.ts'
@@ -37,8 +37,17 @@ import type {
   DonationDetail,
   DonationListItem,
 } from '../donativos/donativo.types.ts'
+import {
+  DonationIncomeNotFoundError,
+  DonationIncomeValidationError,
+} from '../donativos/donativo-income.service.ts'
+import type {
+  DonationIncome,
+  DonationIncomeInput,
+} from '../donativos/donativo-income.types.ts'
 
 const MAX_BODY_BYTES = 16 * 1024
+const MAX_INCOME_BODY_BYTES = 512 * 1024
 const MAX_MULTIPART_BYTES = 11 * 1024 * 1024
 const MAX_USERNAME_LENGTH = 128
 const MAX_PASSWORD_LENGTH = 1024
@@ -88,6 +97,19 @@ type ValidateCity = (id: string) => Promise<boolean>
 type ListConapinaReceptionManagers = () => Promise<ConapinaReceptionManager[]>
 type FindConapinaReceptionManager = (id: string) => Promise<ConapinaReceptionManager | null>
 type DeleteDonation = (donativoId: string) => Promise<unknown>
+type CreateDonationIncome = (
+  donativoId: string,
+  createdBy: string,
+  input: DonationIncomeInput,
+) => Promise<DonationIncome>
+type ListDonationIncomes = (donativoId: string) => Promise<DonationIncome[]>
+type UpdateDonationIncome = (
+  donativoId: string,
+  incomeId: string,
+  updatedBy: string,
+  input: DonationIncomeInput,
+) => Promise<DonationIncome>
+type DeleteDonationIncome = (donativoId: string, incomeId: string) => Promise<void>
 
 type AppDependencies = {
   authenticate: Authenticate
@@ -120,6 +142,10 @@ type AppDependencies = {
   listConapinaReceptionManagers: ListConapinaReceptionManagers
   findConapinaReceptionManager: FindConapinaReceptionManager
   deleteDonation: DeleteDonation
+  createDonationIncome: CreateDonationIncome
+  listDonationIncomes: ListDonationIncomes
+  updateDonationIncome: UpdateDonationIncome
+  deleteDonationIncome: DeleteDonationIncome
 }
 
 type LoginBody = {
@@ -153,6 +179,15 @@ const DONATION_FIELDS = new Set([
   'dui_donante',
   'encargado_personal_id',
 ])
+
+const INCOME_FIELDS = new Set([
+  'nombre_almacen',
+  'nombre_proveedor',
+  'fecha_recepcion_donacion',
+  'description',
+  'productos',
+])
+const INCOME_PRODUCT_FIELDS = new Set(['id', 'brand_name', 'name_product', 'amount', 'price'])
 
 class RequestBodyError extends Error {
   constructor(readonly statusCode: number) {
@@ -221,14 +256,17 @@ async function readBody(request: IncomingMessage, maxBytes: number): Promise<Buf
   return Buffer.concat(chunks)
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+  request: IncomingMessage,
+  maxBytes = MAX_BODY_BYTES,
+): Promise<unknown> {
   const contentType = request.headers['content-type'] ?? ''
 
   if (!contentType.toLowerCase().startsWith('application/json')) {
     throw new RequestBodyError(415)
   }
 
-  const body = await readBody(request, MAX_BODY_BYTES)
+  const body = await readBody(request, maxBytes)
 
   try {
     return JSON.parse(body.toString('utf8'))
@@ -497,6 +535,73 @@ function validateDonationBody(body: unknown): DonationCreateInput | null {
   }
 }
 
+function validateIncomeBody(body: unknown): DonationIncomeInput | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+  const candidate = body as Record<string, unknown>
+  if (Object.keys(candidate).some((field) => !INCOME_FIELDS.has(field))) return null
+
+  const readString = (field: string, maxLength: number, required = true): string | null => {
+    const value = candidate[field]
+    if (typeof value !== 'string') return null
+    const normalized = value.trim()
+    if (normalized.length > maxLength || (required && !normalized)) return null
+    return normalized
+  }
+
+  const nombre_almacen = readString('nombre_almacen', 300)
+  const nombre_proveedor = readString('nombre_proveedor', 300)
+  const fecha_recepcion_donacion = readString('fecha_recepcion_donacion', 10)
+  const description = readString('description', 5_000, false)
+  const productos = candidate.productos
+
+  if (
+    nombre_almacen === null ||
+    nombre_proveedor === null ||
+    fecha_recepcion_donacion === null ||
+    description === null ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(fecha_recepcion_donacion) ||
+    Number.isNaN(Date.parse(`${fecha_recepcion_donacion}T00:00:00.000Z`)) ||
+    !Array.isArray(productos) ||
+    productos.length > 500
+  ) return null
+
+  const normalizedProducts = productos.map((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const product = value as Record<string, unknown>
+    if (Object.keys(product).some((field) => !INCOME_PRODUCT_FIELDS.has(field))) return null
+    const brandName = typeof product.brand_name === 'string' ? product.brand_name.trim() : null
+    const productName = typeof product.name_product === 'string' ? product.name_product.trim() : null
+    const id = product.id === undefined
+      ? undefined
+      : typeof product.id === 'string' && product.id.trim().length <= 200
+        ? product.id.trim()
+        : null
+    if (
+      id === null ||
+      brandName === null || brandName.length > 300 ||
+      !productName || productName.length > 500 ||
+      typeof product.amount !== 'number' || !Number.isFinite(product.amount) || product.amount <= 0 ||
+      typeof product.price !== 'number' || !Number.isFinite(product.price) || product.price < 0
+    ) return null
+    return {
+      ...(id ? { id } : {}),
+      brand_name: brandName,
+      name_product: productName,
+      amount: product.amount,
+      price: product.price,
+    }
+  })
+  if (normalizedProducts.some((product) => product === null)) return null
+
+  return {
+    nombre_almacen,
+    nombre_proveedor,
+    fecha_recepcion_donacion,
+    description,
+    productos: normalizedProducts as DonationIncomeInput['productos'],
+  }
+}
+
 function readBearerToken(request: IncomingMessage): string | null {
   const authorization = request.headers.authorization
   if (!authorization?.startsWith('Bearer ')) return null
@@ -552,6 +657,10 @@ export function createRequestHandler({
   listConapinaReceptionManagers,
   findConapinaReceptionManager,
   deleteDonation,
+  createDonationIncome,
+  listDonationIncomes,
+  updateDonationIncome,
+  deleteDonationIncome,
 }: AppDependencies) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (!applyCors(request, response, allowedOrigin)) {
@@ -588,6 +697,12 @@ export function createRequestHandler({
     const isDonationDocumentItemRoute = donationDocumentItemMatch !== null
     const donationActaMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)\/acta$/)
     const isDonationActaRoute = donationActaMatch !== null
+    const donationIncomeMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)\/incomes$/)
+    const isDonationIncomeRoute = donationIncomeMatch !== null
+    const donationIncomeItemMatch = url.pathname.match(
+      /^\/api\/donativos\/([^/]+)\/incomes\/([^/]+)$/,
+    )
+    const isDonationIncomeItemRoute = donationIncomeItemMatch !== null
     const donationDetailMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)$/)
     const isDonationDetailRoute = donationDetailMatch !== null
 
@@ -602,6 +717,8 @@ export function createRequestHandler({
       !isDonationDocumentRoute &&
       !isDonationDocumentItemRoute &&
       !isDonationActaRoute &&
+      !isDonationIncomeRoute &&
+      !isDonationIncomeItemRoute &&
       !isDonationDetailRoute
     ) {
       sendJson(response, 404, { ok: false, message: 'Recurso no encontrado.' })
@@ -614,6 +731,10 @@ export function createRequestHandler({
       ? request.method === 'GET' || request.method === 'POST'
       : isDonationDetailRoute
         ? request.method === 'GET' || request.method === 'PATCH' || request.method === 'DELETE'
+        : isDonationIncomeRoute
+          ? request.method === 'GET' || request.method === 'POST'
+        : isDonationIncomeItemRoute
+          ? request.method === 'PATCH' || request.method === 'DELETE'
         : isDonationActaRoute
           ? request.method === 'GET' || request.method === 'POST'
         : isDonationDocumentItemRoute
@@ -629,6 +750,10 @@ export function createRequestHandler({
             ? 'GET, OPTIONS'
           : isDonationDetailRoute
             ? 'GET, PATCH, DELETE, OPTIONS'
+            : isDonationIncomeRoute
+              ? 'GET, POST, OPTIONS'
+            : isDonationIncomeItemRoute
+              ? 'PATCH, DELETE, OPTIONS'
             : isDonationActaRoute
               ? 'GET, POST, OPTIONS'
             : isDonationDocumentItemRoute
@@ -718,6 +843,66 @@ export function createRequestHandler({
           ok: true,
           encargados: await listConapinaReceptionManagers(),
         })
+        return
+      }
+
+      if (isDonationIncomeRoute || isDonationIncomeItemRoute) {
+        const token = readBearerToken(request)
+        const currentUser = token ? resolveSession(token) : null
+        if (!currentUser) {
+          sendJson(response, 401, { ok: false, message: 'Debe iniciar sesión nuevamente.' })
+          return
+        }
+
+        const routeMatch = donationIncomeItemMatch ?? donationIncomeMatch
+        const donativoId = decodeURIComponent(routeMatch?.[1] ?? '')
+
+        if (isDonationIncomeRoute && request.method === 'GET') {
+          sendJson(response, 200, {
+            ok: true,
+            incomes: await listDonationIncomes(donativoId),
+          })
+          return
+        }
+
+        if (isDonationIncomeItemRoute && request.method === 'DELETE') {
+          const incomeId = decodeURIComponent(donationIncomeItemMatch?.[2] ?? '')
+          await deleteDonationIncome(donativoId, incomeId)
+          sendJson(response, 200, { ok: true })
+          return
+        }
+
+        const incomeBody = validateIncomeBody(await readJsonBody(request, MAX_INCOME_BODY_BYTES))
+        if (!incomeBody) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Los datos de la recepción son inválidos.',
+          })
+          return
+        }
+
+        if (isDonationIncomeItemRoute) {
+          const incomeId = decodeURIComponent(donationIncomeItemMatch?.[2] ?? '')
+          const income = await updateDonationIncome(
+            donativoId,
+            incomeId,
+            currentUser,
+            incomeBody,
+          )
+          sendJson(response, 200, { ok: true, income })
+          return
+        }
+
+        if (incomeBody.productos.some((product) => product.id)) {
+          sendJson(response, 400, {
+            ok: false,
+            message: 'Los productos nuevos no deben incluir identificadores.',
+          })
+          return
+        }
+
+        const income = await createDonationIncome(donativoId, currentUser, incomeBody)
+        sendJson(response, 201, { ok: true, income })
         return
       }
 
@@ -997,6 +1182,8 @@ export function createRequestHandler({
           ok: false,
           message: isDonationDocumentRoute
             ? 'El documento enviado no es válido.'
+            : isDonationIncomeRoute || isDonationIncomeItemRoute
+            ? 'Los datos de la recepción son inválidos.'
             : isDonationRoute || isDonationDetailRoute
             ? 'Los datos del donativo son inválidos.'
             : 'Datos de acceso inválidos.',
@@ -1053,6 +1240,29 @@ export function createRequestHandler({
         return
       }
 
+      if (error instanceof DonationIncomeValidationError) {
+        sendJson(response, 400, { ok: false, message: 'El identificador de la recepción no es válido.' })
+        return
+      }
+
+      if (error instanceof DonationIncomeNotFoundError) {
+        sendJson(response, 404, { ok: false, message: 'La recepción no existe para este donativo.' })
+        return
+      }
+
+      if (
+        (isDonationIncomeRoute || isDonationIncomeItemRoute) &&
+        !(error instanceof DatabaseConnectionError) &&
+        !(error instanceof DatabaseQueryError)
+      ) {
+        console.error('[donativo_incomes] unexpected_error')
+        sendJson(response, 500, {
+          ok: false,
+          message: 'No fue posible procesar la recepción en este momento.',
+        })
+        return
+      }
+
       const category =
         error instanceof DatabaseConnectionError
           ? 'database_connection_failed'
@@ -1064,6 +1274,8 @@ export function createRequestHandler({
           ? 'donativo_documentos'
           : isDonationActaRoute
             ? 'donativo_actas'
+          : isDonationIncomeRoute || isDonationIncomeItemRoute
+            ? 'donativo_incomes'
           : isDonationRoute || isDonationDetailRoute
             ? 'donativos'
             : 'auth'
@@ -1079,6 +1291,10 @@ export function createRequestHandler({
             ? request.method === 'GET'
               ? 'No fue posible abrir el acta en este momento.'
               : 'No fue posible generar el acta en este momento.'
+          : isDonationIncomeRoute || isDonationIncomeItemRoute
+            ? request.method === 'GET'
+              ? 'No fue posible cargar las recepciones.'
+              : 'No fue posible guardar las recepciones en este momento.'
           : isDonationRoute || isDonationDetailRoute
           ? request.method === 'GET'
             ? 'No fue posible cargar las donaciones.'
