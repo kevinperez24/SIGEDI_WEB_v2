@@ -60,6 +60,11 @@ function mapIncome(record: IncomeRecord, products: DonationIncomeProduct[]): Don
   return {
     id: String(record.id),
     donativo_id: String(record.donativo_id),
+    tipo_recepcion: record.tipo_recepcion === 'FINAL' ? 'FINAL' : 'PARCIAL',
+    numero_entrega: Number(record.numero_entrega ?? 0),
+    estado_recepcion: record.estado_recepcion === 'FINALIZADA'
+      ? 'FINALIZADA'
+      : record.estado_recepcion === 'DOCUMENTADA' ? 'DOCUMENTADA' : 'PENDIENTE_ACTA',
     nombre_almacen: String(record.nombre_almacen ?? ''),
     nombre_proveedor: String(record.nombre_proveedor ?? ''),
     fecha_recepcion_donacion: String(record.fecha_recepcion_donacion ?? ''),
@@ -121,7 +126,12 @@ function buildProductStatements(
 }
 
 export interface DonationIncomeRepository {
-  create(donativoId: string, createdBy: string, input: DonationIncomeInput): Promise<DonationIncome | null>
+  create(
+    donativoId: string,
+    createdBy: string,
+    input: DonationIncomeInput,
+    numeroEntrega: number,
+  ): Promise<DonationIncome | null>
   list(donativoId: string): Promise<DonationIncome[] | null>
   update(
     donativoId: string,
@@ -137,6 +147,7 @@ export class SurrealDonationIncomeRepository implements DonationIncomeRepository
     donativoId: string,
     createdBy: string,
     input: DonationIncomeInput,
+    numeroEntrega: number,
   ): Promise<DonationIncome | null> {
     let createdIncomeId: ReturnType<typeof newRecordId> | undefined
     try {
@@ -155,6 +166,9 @@ export class SurrealDonationIncomeRepository implements DonationIncomeRepository
         `
           CREATE $income_id CONTENT {
             donativo_id: $donativo_id,
+            tipo_recepcion: $tipo_recepcion,
+            numero_entrega: $numero_entrega,
+            estado_recepcion: 'PENDIENTE_ACTA',
             nombre_almacen: $nombre_almacen,
             nombre_proveedor: $nombre_proveedor,
             fecha_recepcion_donacion: $fecha_recepcion_donacion,
@@ -166,6 +180,8 @@ export class SurrealDonationIncomeRepository implements DonationIncomeRepository
         {
           income_id: incomeId,
           donativo_id: donationId,
+          tipo_recepcion: input.tipo_recepcion,
+          numero_entrega: numeroEntrega,
           nombre_almacen: input.nombre_almacen,
           nombre_proveedor: input.nombre_proveedor,
           fecha_recepcion_donacion: new DateTime(`${input.fecha_recepcion_donacion}T00:00:00.000Z`),
@@ -213,7 +229,7 @@ export class SurrealDonationIncomeRepository implements DonationIncomeRepository
       })
       if (!donations[0]) return null
       const [incomes] = await database.query<[IncomeRecord[]]>(
-        `SELECT * FROM incomes WHERE donativo_id = $donativo_id ORDER BY created_at ASC;`,
+        `SELECT * FROM incomes WHERE donativo_id = $donativo_id ORDER BY numero_entrega ASC;`,
         { donativo_id: donationId },
       )
       if (incomes.length === 0) return []
@@ -257,6 +273,7 @@ export class SurrealDonationIncomeRepository implements DonationIncomeRepository
       await database.query(
         `
           UPDATE $income_id MERGE {
+            tipo_recepcion: $tipo_recepcion,
             nombre_almacen: $nombre_almacen,
             nombre_proveedor: $nombre_proveedor,
             fecha_recepcion_donacion: $fecha_recepcion_donacion,
@@ -266,6 +283,7 @@ export class SurrealDonationIncomeRepository implements DonationIncomeRepository
         `,
         {
           income_id: incomeId,
+          tipo_recepcion: input.tipo_recepcion,
           nombre_almacen: input.nombre_almacen,
           nombre_proveedor: input.nombre_proveedor,
           fecha_recepcion_donacion: new DateTime(`${input.fecha_recepcion_donacion}T00:00:00.000Z`),

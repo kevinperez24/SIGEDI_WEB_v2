@@ -5,8 +5,11 @@ import { fileURLToPath } from 'node:url'
 import PDFDocument from 'pdfkit'
 import { TextCodec } from 'surrealdb'
 import type { DonationDetail } from './donativo.types.ts'
+import type { DonationIncome } from './donativo-income.types.ts'
+import { calculateIncomeProductTotal } from './donativo-income.types.ts'
 import type { DonationActaRepository } from './donativo-acta.repository.ts'
 import type {
+  CreateDonationActaInput,
   DonationActaSummary,
   DownloadedDonationActa,
 } from './donativo-acta.types.ts'
@@ -19,6 +22,7 @@ export class DonationActaValidationError extends Error {}
 export class DonationActaNotFoundError extends Error {}
 
 type GetDonation = (donativoId: string) => Promise<DonationDetail | null>
+type ListIncomes = (donativoId: string) => Promise<DonationIncome[]>
 
 function getCurrentActaDate(): {
   fullDate: string
@@ -45,17 +49,90 @@ export class DonationActaService {
     private readonly getDonation: GetDonation,
     private readonly donationStorageRoot = storageDirectory,
     private readonly privateStorageRoot = storageRoot,
+    private readonly listIncomes: ListIncomes = async () => [],
   ) {}
 
   async generate(donativoId: string, createdBy: string): Promise<DonationActaSummary> {
+    const incomes = await this.listIncomes(donativoId)
+    const finalIncome = incomes.find((income) => income.tipo_recepcion === 'FINAL')
+    if (!finalIncome) throw new DonationActaValidationError()
+    return this.generateTyped(donativoId, createdBy, { income_id: finalIncome.id })
+  }
+
+  async generateTyped(
+    donativoId: string,
+    createdBy: string,
+    input: CreateDonationActaInput,
+  ): Promise<DonationActaSummary> {
     const donationKey = this.parseDonationId(donativoId)
     const donation = await this.getDonation(donativoId)
     if (!donation) throw new DonationActaNotFoundError()
+    const incomes = await this.listIncomes(donativoId)
+    const activeActas = await this.repository.listActive(donativoId)
+    const activeFinal = activeActas.find((acta) => acta.es_acta_final)
+    const activeProvisionals = activeActas.filter((acta) => acta.tipo_acta === 'PROVISIONAL')
+    const selectedIndex = incomes.findIndex((income) => income.id === input.income_id)
+    if (selectedIndex < 0) throw new DonationActaValidationError()
+    const selectedIncome = incomes[selectedIndex]!
+    const sequenceIsValid = incomes.every(
+      (income, index) => income.numero_entrega === index + 1,
+    )
+    if (!sequenceIsValid) throw new DonationActaValidationError()
+    const tipoActa = selectedIncome.tipo_recepcion === 'FINAL' ? 'FINAL' : 'PROVISIONAL'
+    if (tipoActa === 'PROVISIONAL' && activeFinal) {
+      throw new DonationActaValidationError()
+    }
 
-    const version = await this.repository.nextVersion(donativoId)
-    const contents = await this.createPdf(donation)
-    const storedName = `acta_donacion_v${version}_${randomUUID()}.pdf`
-    const originalName = `acta_donacion_v${version}.pdf`
+    let selectedIncomes: DonationIncome[]
+    const numeroEntrega = selectedIncome.numero_entrega
+    if (tipoActa === 'PROVISIONAL') {
+      if (incomes.slice(0, selectedIndex).some((income) => income.tipo_recepcion !== 'PARCIAL')) {
+        throw new DonationActaValidationError()
+      }
+      const priorDeliveriesAreDocumented = Array.from(
+        { length: selectedIndex },
+        (_, index) => index + 1,
+      ).every((deliveryNumber) => activeProvisionals.some(
+        (acta) => acta.numero_entrega === deliveryNumber,
+      ))
+      if (!priorDeliveriesAreDocumented) throw new DonationActaValidationError()
+      selectedIncomes = [selectedIncome]
+    } else {
+      if (selectedIndex !== incomes.length - 1
+        || incomes.slice(0, selectedIndex).some((income) => income.tipo_recepcion !== 'PARCIAL')) {
+        throw new DonationActaValidationError()
+      }
+      const priorDeliveriesAreDocumented = incomes.length <= 1 || Array.from(
+        { length: incomes.length - 1 },
+        (_, index) => index + 1,
+      ).every((deliveryNumber) => activeProvisionals.some(
+        (acta) => acta.numero_entrega === deliveryNumber,
+      ))
+      if (!priorDeliveriesAreDocumented) throw new DonationActaValidationError()
+      selectedIncomes = incomes.filter((income) => income.numero_entrega <= numeroEntrega)
+    }
+
+    this.validateTotals(selectedIncomes)
+    const previousProvisionals = activeProvisionals
+      .filter((acta) => acta.numero_entrega < numeroEntrega)
+      .sort((first, second) => first.numero_entrega - second.numero_entrega)
+    const version = await this.repository.nextVersion(donativoId, tipoActa, numeroEntrega)
+    const existingActa = activeActas.find((acta) =>
+      acta.tipo_acta === tipoActa && acta.numero_entrega === numeroEntrega,
+    )
+    const codigoActa = existingActa?.codigo_acta
+      ?? this.buildActaCode(donation, donationKey, selectedIncome, tipoActa)
+    const contents = await this.createPdf(donation, selectedIncomes, {
+      tipoActa,
+      numeroEntrega,
+      codigoActa,
+      referencias: previousProvisionals,
+    })
+    const typeSlug = tipoActa === 'FINAL'
+      ? 'final'
+      : `provisional_entrega_${numeroEntrega}`
+    const storedName = `acta_${typeSlug}_v${version}_${randomUUID()}.pdf`
+    const originalName = `acta_${typeSlug}_v${version}.pdf`
     const relativePath = `donativos/${donationKey}/actas/${storedName}`
     const physicalDirectory = resolve(this.donationStorageRoot, donationKey, 'actas')
     const physicalPath = resolve(physicalDirectory, storedName)
@@ -72,6 +149,14 @@ export class DonationActaService {
         relativePath,
         sizeBytes: contents.byteLength,
         createdBy,
+        tipoActa,
+        numeroEntrega,
+        codigoActa,
+        incomeIds: selectedIncomes.map((income) => income.id),
+        actasReferencia: previousProvisionals.map((acta) => acta.id),
+        esActaFinal: tipoActa === 'FINAL',
+        targetIncomeId: selectedIncome.id,
+        receptionState: tipoActa === 'FINAL' ? 'FINALIZADA' : 'DOCUMENTADA',
       })
     } catch (error) {
       await rm(physicalPath, { force: true }).catch(() => undefined)
@@ -82,6 +167,11 @@ export class DonationActaService {
   async findActive(donativoId: string): Promise<DonationActaSummary | null> {
     this.parseDonationId(donativoId)
     return this.repository.findActive(donativoId)
+  }
+
+  async listActive(donativoId: string): Promise<DonationActaSummary[]> {
+    this.parseDonationId(donativoId)
+    return this.repository.listActive(donativoId)
   }
 
   async download(donativoId: string): Promise<DownloadedDonationActa> {
@@ -102,7 +192,52 @@ export class DonationActaService {
     }
   }
 
-  private createPdf(donation: DonationDetail): Promise<Buffer> {
+  async downloadById(donativoId: string, actaId: string): Promise<DownloadedDonationActa> {
+    this.parseDonationId(donativoId)
+    const acta = await this.repository.findActiveFileById(donativoId, actaId)
+    if (!acta || acta.mime_type !== 'application/pdf') throw new DonationActaNotFoundError()
+    return this.readStoredActa(acta)
+  }
+
+  private async readStoredActa(acta: {
+    nombre_archivo: string
+    ruta_archivo: string
+    mime_type: 'application/pdf'
+  }): Promise<DownloadedDonationActa> {
+    const physicalPath = resolve(this.privateStorageRoot, acta.ruta_archivo)
+    this.assertContained(this.privateStorageRoot, physicalPath)
+    try {
+      return {
+        contents: await readFile(physicalPath),
+        name: acta.nombre_archivo,
+        mimeType: 'application/pdf',
+      }
+    } catch {
+      throw new DonationActaNotFoundError()
+    }
+  }
+
+  private validateTotals(incomes: DonationIncome[]): void {
+    for (const income of incomes) {
+      for (const product of income.productos) {
+        const calculated = calculateIncomeProductTotal(product.amount, product.price)
+        if (Math.round(calculated * 100) !== Math.round(product.total_price * 100)) {
+          throw new DonationActaValidationError()
+        }
+      }
+    }
+  }
+
+  private createPdf(
+    donation: DonationDetail,
+    incomes: DonationIncome[],
+    actaContext: {
+      tipoActa: 'PROVISIONAL' | 'FINAL'
+      numeroEntrega: number
+      codigoActa: string
+      referencias: DonationActaSummary[]
+    },
+  ): Promise<Buffer> {
     return new Promise((resolvePdf, reject) => {
       const document = new PDFDocument({
         size: 'LETTER',
@@ -209,6 +344,15 @@ export class DonationActaService {
           width: tableWidth,
         })
 
+      document
+        .font('Helvetica-Bold')
+        .fontSize(8.5)
+        .text(actaContext.codigoActa, tableX, document.y + 3, {
+          width: tableWidth,
+          align: 'center',
+        })
+      document.y += 5
+
       const dynamicValues = {
         marcoActa: donation.marco_acta?.trim() ?? '',
         nombreEntidad: donation.nombre_entidad?.trim() ?? '',
@@ -294,6 +438,179 @@ export class DonationActaService {
       document.font('Helvetica').text(' del año ', { continued: true })
       document.font('Helvetica-Bold').text(actaDate.year, { continued: true })
       document.font('Helvetica').text('.', { continued: false })
+
+      const pageBottom = () => document.page.height - document.page.margins.bottom
+      const ensureSpace = (height: number) => {
+        if (document.y + height > pageBottom()) document.addPage()
+      }
+      const formatMoney = (value: number) => new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(Math.round(value * 100) / 100)
+      const referenceLabels = actaContext.referencias.map(
+        (acta) => acta.codigo_acta,
+      )
+      if (referenceLabels.length > 0) {
+        const referenceText = actaContext.tipoActa === 'FINAL'
+          ? `El presente documento constituye el acta final de recepción de la donación y consolida las entregas parciales documentadas mediante las siguientes actas provisionales: ${referenceLabels.join(', ')}.`
+          : `El presente documento corresponde a una recepción parcial de la donación y da continuidad a las siguientes actas provisionales anteriormente emitidas: ${referenceLabels.join(', ')}.`
+        document.y += 8
+        ensureSpace(document.heightOfString(referenceText, { width: tableWidth, lineGap: 0.5 }) + 8)
+        document.font('Helvetica').fontSize(8.5).text(referenceText, tableX, document.y, {
+          width: tableWidth,
+          align: 'left',
+          lineGap: 0.5,
+        })
+      }
+
+      document.y += 12
+      ensureSpace(34)
+      document.font('Helvetica-Bold').fontSize(10).text(
+        'DETALLE DE LA DONACIÓN RECIBIDA',
+        tableX,
+        document.y,
+        { width: tableWidth, align: 'center' },
+      )
+      document.y += 8
+
+      if (incomes.length === 0) {
+        ensureSpace(22)
+        document.font('Helvetica').fontSize(8.5).text('Sin productos registrados.', tableX, document.y, {
+          width: tableWidth,
+          align: 'center',
+        })
+      } else {
+        const columnWidths = [24, 72, 155, 55, 85, tableWidth - 391]
+        const headers = ['#', 'Marca', 'Producto', 'Cantidad', 'Precio unitario', 'Total']
+        let generalTotalCents = 0
+        const drawProductHeader = (startY: number) => {
+          let x = tableX
+          for (let index = 0; index < headers.length; index += 1) {
+            const width = columnWidths[index]!
+            document.rect(x, startY, width, 20).lineWidth(0.5).strokeColor('#000000').stroke()
+            document.font('Helvetica-Bold').fontSize(7.2).text(headers[index]!, x + 3, startY + 6, {
+              width: width - 6,
+              align: index === 3 ? 'center' : index >= 4 ? 'right' : 'left',
+              lineBreak: false,
+            })
+            x += width
+          }
+          return startY + 20
+        }
+
+        for (let incomeIndex = 0; incomeIndex < incomes.length; incomeIndex += 1) {
+          const income = incomes[incomeIndex]!
+          const receptionDate = income.fecha_recepcion_donacion
+            ? new Intl.DateTimeFormat('es-SV', { dateStyle: 'medium', timeZone: 'UTC' })
+              .format(new Date(income.fecha_recepcion_donacion))
+            : ''
+          const metadata = [
+            `Almacén: ${income.nombre_almacen || ''}`,
+            `Proveedor: ${income.nombre_proveedor || ''}`,
+            `Fecha de recepción: ${receptionDate}`,
+            `Descripción: ${income.description || ''}`,
+          ].join('\n')
+          const metadataHeight = document.font('Helvetica').fontSize(8).heightOfString(metadata, {
+            width: tableWidth,
+            lineGap: 0.2,
+          })
+          const firstProduct = income.productos[0]
+          const firstRowHeight = firstProduct
+            ? Math.max(
+              20,
+              document.heightOfString(firstProduct.brand_name || '', { width: columnWidths[1]! - 8 }) + 8,
+              document.heightOfString(firstProduct.name_product || '', { width: columnWidths[2]! - 8 }) + 8,
+            )
+            : 0
+          ensureSpace(18 + metadataHeight + 7 + 20 + firstRowHeight)
+          document.font('Helvetica-Bold').fontSize(8.8).text(
+            `Entrega ${incomeIndex + 1}`, tableX, document.y, { width: tableWidth },
+          )
+          document.y += 3
+          document.font('Helvetica').fontSize(8).text(metadata, tableX, document.y, {
+            width: tableWidth,
+            lineGap: 0.2,
+          })
+          document.y += 6
+
+          let rowY = drawProductHeader(document.y)
+          let incomeSubtotalCents = 0
+          if (income.productos.length === 0) {
+            document.rect(tableX, rowY, tableWidth, 20).lineWidth(0.5).strokeColor('#000000').stroke()
+            document.font('Helvetica').fontSize(7.7).text('Sin productos registrados.', tableX + 4, rowY + 6, {
+              width: tableWidth - 8,
+              align: 'center',
+            })
+            rowY += 20
+          } else {
+            for (let productIndex = 0; productIndex < income.productos.length; productIndex += 1) {
+              const product = income.productos[productIndex]!
+              const rowHeight = Math.max(
+                20,
+                document.font('Helvetica').fontSize(7.5).heightOfString(product.brand_name || '', {
+                  width: columnWidths[1]! - 8,
+                }) + 8,
+                document.heightOfString(product.name_product || '', {
+                  width: columnWidths[2]! - 8,
+                }) + 8,
+              )
+              if (rowY + rowHeight > pageBottom()) {
+                document.addPage()
+                document.font('Helvetica-Bold').fontSize(8).text(
+                  `${income.nombre_almacen || `Entrega ${incomeIndex + 1}`} (continuación)`,
+                  tableX,
+                  document.y,
+                  { width: tableWidth },
+                )
+                document.y += 4
+                rowY = drawProductHeader(document.y)
+              }
+              const values = [
+                String(productIndex + 1),
+                product.brand_name || '',
+                product.name_product || '',
+                String(product.amount),
+                formatMoney(product.price),
+                formatMoney(product.total_price),
+              ]
+              let x = tableX
+              for (let columnIndex = 0; columnIndex < values.length; columnIndex += 1) {
+                const width = columnWidths[columnIndex]!
+                document.rect(x, rowY, width, rowHeight).lineWidth(0.5).strokeColor('#000000').stroke()
+                document.font('Helvetica').fontSize(7.5).text(values[columnIndex]!, x + 4, rowY + 6, {
+                  width: width - 8,
+                  align: columnIndex === 0 || columnIndex === 3
+                    ? 'center'
+                    : columnIndex >= 4 ? 'right' : 'left',
+                  lineGap: 0.2,
+                })
+                x += width
+              }
+              incomeSubtotalCents += Math.round(product.total_price * 100)
+              rowY += rowHeight
+            }
+          }
+          document.y = rowY + 5
+          ensureSpace(20)
+          document.font('Helvetica-Bold').fontSize(8.2).text(
+            `Subtotal almacén: ${formatMoney(incomeSubtotalCents / 100)}`,
+            tableX,
+            document.y,
+            { width: tableWidth, align: 'right' },
+          )
+          generalTotalCents += incomeSubtotalCents
+          document.y += 12
+        }
+        ensureSpace(24)
+        document.font('Helvetica-Bold').fontSize(9.5).text(
+          `TOTAL GENERAL DE LA DONACIÓN: ${formatMoney(generalTotalCents / 100)}`,
+          tableX,
+          document.y,
+          { width: tableWidth, align: 'right' },
+        )
+      }
 
       const signatureBlockHeight = 245
       const signatureBlockTop = document.y + 22
@@ -450,6 +767,32 @@ export class DonationActaService {
     } catch {
       throw new DonationActaValidationError()
     }
+  }
+
+  private buildActaCode(
+    donation: DonationDetail,
+    donationKey: string,
+    income: DonationIncome,
+    tipoActa: 'PROVISIONAL' | 'FINAL',
+  ): string {
+    const prefix = tipoActa === 'FINAL' ? 'AF' : 'AP'
+    const year = /^\d{4}/.exec(income.fecha_recepcion_donacion)?.[0]
+      ?? new Intl.DateTimeFormat('en', { year: 'numeric', timeZone: 'America/El_Salvador' })
+        .format(new Date())
+    const functionalDonationCode = donation.correlativo_acta?.trim()
+      .replace(/[^A-Za-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .toUpperCase()
+    let donationCode = functionalDonationCode
+    if (!donationCode) {
+      let hash = 2166136261
+      for (const character of donationKey) {
+        hash ^= character.charCodeAt(0)
+        hash = Math.imul(hash, 16777619)
+      }
+      donationCode = String(hash >>> 0).slice(-6).padStart(6, '0')
+    }
+    return `${prefix}-${year}-${donationCode}-${String(income.numero_entrega).padStart(2, '0')}`
   }
 
   private assertContained(root: string, filePath: string): void {

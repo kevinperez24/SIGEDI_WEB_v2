@@ -1,0 +1,164 @@
+.donation-provisional-acts {
+  display: grid;
+  gap: 16px;
+}
+
+.provisional-acts-state {
+  margin: 0;
+  padding: 22px;
+  border: 1px dashed var(--conapina-border);
+  border-radius: 10px;
+  background: var(--conapina-background);
+  color: var(--conapina-text-secondary);
+  text-align: center;
+}
+
+.provisional-income-list {
+  display: grid;
+  gap: 12px;
+}
+
+.provisional-income-card {
+  overflow: hidden;
+  border: 1px solid var(--conapina-border);
+  border-radius: 11px;
+  background: var(--conapina-white);
+}
+
+.provisional-income-card > header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 15px;
+  background: var(--conapina-blue-soft);
+}
+
+.provisional-income-card > header > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--conapina-white);
+  color: var(--conapina-blue-secondary);
+  font-weight: 900;
+}
+
+.provisional-income-card h4,
+.provisional-income-card p {
+  margin: 0;
+}
+
+.provisional-income-card h4 {
+  color: var(--conapina-navy);
+  font-size: 14px;
+}
+
+.provisional-income-card p {
+  margin-top: 2px;
+  color: var(--conapina-text-secondary);
+  font-size: 12px;
+}
+
+.provisional-income-card > header > strong {
+  color: var(--conapina-navy);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.provisional-income-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.provisional-income-card dl > div {
+  display: grid;
+  gap: 3px;
+  padding: 12px 15px;
+  border-right: 1px solid var(--conapina-border);
+}
+
+.provisional-income-card dl > div:last-child {
+  border-right: 0;
+}
+
+.provisional-income-card dt {
+  color: var(--conapina-text-secondary);
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.provisional-income-card dd {
+  margin: 0;
+  color: var(--conapina-text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.provisional-income-card dd.has-acta {
+  color: var(--conapina-success);
+}
+
+.provisional-income-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 11px 15px;
+  border-top: 1px solid var(--conapina-border);
+}
+
+.provisional-income-actions button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--conapina-blue-secondary);
+  border-radius: 8px;
+  background: var(--conapina-white);
+  color: var(--conapina-blue-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.provisional-income-actions button.is-primary {
+  background: var(--conapina-blue-secondary);
+  color: var(--conapina-white);
+}
+
+.provisional-income-actions button:focus-visible {
+  outline: 3px solid rgb(21 145 191 / 24%);
+  outline-offset: 2px;
+}
+
+.provisional-income-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+@media (max-width: 680px) {
+  .provisional-income-card > header {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .provisional-income-card > header > strong {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .provisional-income-card dl {
+    grid-template-columns: 1fr;
+  }
+
+  .provisional-income-card dl > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--conapina-border);
+  }
+
+  .provisional-income-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

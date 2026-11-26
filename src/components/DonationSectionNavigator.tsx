@@ -11,6 +11,7 @@ export const donationSections = [
   { number: 8, label: 'Donante o Representante' },
   { number: 9, label: 'Encargado de Recepción' },
   { number: 10, label: 'Registro Fotográfico' },
+  { number: 11, label: 'Actas de recepción' },
 ] as const
 
 export type DonationSectionNumber = (typeof donationSections)[number]['number']

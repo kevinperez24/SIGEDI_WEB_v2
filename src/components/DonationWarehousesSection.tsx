@@ -15,6 +15,9 @@ export type DonationWarehouseProductDraft = {
 export type DonationWarehouseDraft = {
   id: string
   recordId?: string
+  receptionType: 'PARCIAL' | 'FINAL'
+  deliveryNumber?: number
+  receptionStatus?: 'PENDIENTE_ACTA' | 'DOCUMENTADA' | 'FINALIZADA'
   warehouseName: string
   supplierName: string
   receptionDate: string
@@ -39,6 +42,7 @@ function createTemporaryId(prefix: 'warehouse' | 'product'): string {
 function createWarehouse(): DonationWarehouseDraft {
   return {
     id: createTemporaryId('warehouse'),
+    receptionType: 'PARCIAL',
     warehouseName: '',
     supplierName: '',
     receptionDate: '',
@@ -158,6 +162,9 @@ export function donationIncomeToDraft(
   return {
     id: createTemporaryId('warehouse'),
     recordId: income.id,
+    receptionType: income.tipo_recepcion,
+    deliveryNumber: income.numero_entrega,
+    receptionStatus: income.estado_recepcion,
     warehouseName: income.nombre_almacen,
     supplierName: income.nombre_proveedor,
     receptionDate: income.fecha_recepcion_donacion.slice(0, 10),
@@ -179,6 +186,7 @@ export function donationWarehouseToInput(
   warehouse: DonationWarehouseDraft,
 ): DonationIncomeInput {
   return {
+    tipo_recepcion: warehouse.receptionType,
     nombre_almacen: warehouse.warehouseName.trim(),
     nombre_proveedor: warehouse.supplierName.trim(),
     fecha_recepcion_donacion: warehouse.receptionDate,
@@ -196,6 +204,13 @@ export function donationWarehouseToInput(
 export function validateDonationWarehouses(
   warehouses: readonly DonationWarehouseDraft[],
 ): string | null {
+  const finalIndexes = warehouses.flatMap((warehouse, index) =>
+    warehouse.receptionType === 'FINAL' ? [index] : [],
+  )
+  if (finalIndexes.length > 1) return 'Solo puede existir una recepción final.'
+  if (finalIndexes.length === 1 && finalIndexes[0] !== warehouses.length - 1) {
+    return 'La recepción final debe ser la última entrega.'
+  }
   for (const warehouse of warehouses) {
     if (!warehouse.warehouseName.trim() || !warehouse.supplierName.trim() || !warehouse.receptionDate) {
       return 'Complete el almacén, proveedor y fecha de cada recepción.'
@@ -222,6 +237,7 @@ function DonationWarehousesSection({
     (total, warehouse) => total + calculateWarehouseTotal(warehouse),
     0n,
   )
+  const hasFinalReception = value.some((warehouse) => warehouse.receptionType === 'FINAL')
   const updateWarehouse = (
     warehouseId: string,
     update: (warehouse: DonationWarehouseDraft) => DonationWarehouseDraft,
@@ -289,12 +305,18 @@ function DonationWarehousesSection({
           className="modal-primary-button donation-warehouse-add"
           type="button"
           onClick={() => onChange([...value, createWarehouse()])}
-          disabled={disabled}
+          disabled={disabled || hasFinalReception}
         >
           <span aria-hidden="true">＋</span>
           Agregar otro almacén/proveedor
         </button>
       </div>
+
+      {hasFinalReception && (
+        <p className="donation-reception-closed" role="status">
+          La recepción de la donación está cerrada. No pueden agregarse nuevas recepciones.
+        </p>
+      )}
 
       {value.length === 0 ? (
         <div className="donation-warehouses-empty">
@@ -318,6 +340,9 @@ function DonationWarehousesSection({
                       <strong>{warehouse.warehouseName.trim() || `Almacén ${warehouseIndex + 1}`}</strong>
                       <small>
                         Proveedor: {warehouse.supplierName.trim() || 'No indicado'}
+                      </small>
+                      <small>
+                        Entrega {warehouse.deliveryNumber ?? warehouseIndex + 1} · {warehouse.receptionType === 'FINAL' ? 'Final' : 'Parcial'}
                       </small>
                     </span>
                   </div>
@@ -363,6 +388,39 @@ function DonationWarehousesSection({
                 >
                   <div className="donation-warehouse-card-content-inner">
                     <div className="donation-warehouse-fields">
+                      <fieldset className="donation-reception-type donation-field donation-field--wide">
+                        <legend>Tipo de recepción</legend>
+                        <label>
+                          <input
+                            type="radio"
+                            name={`${warehouse.id}-reception-type`}
+                            value="PARCIAL"
+                            checked={warehouse.receptionType === 'PARCIAL'}
+                            onChange={() => updateWarehouse(warehouse.id, (current) => ({
+                              ...current,
+                              receptionType: 'PARCIAL',
+                            }))}
+                            disabled={disabled || warehouse.receptionStatus !== undefined
+                              && warehouse.receptionStatus !== 'PENDIENTE_ACTA'}
+                          />
+                          Entrega parcial
+                        </label>
+                        <label>
+                          <input
+                            type="radio"
+                            name={`${warehouse.id}-reception-type`}
+                            value="FINAL"
+                            checked={warehouse.receptionType === 'FINAL'}
+                            onChange={() => updateWarehouse(warehouse.id, (current) => ({
+                              ...current,
+                              receptionType: 'FINAL',
+                            }))}
+                            disabled={disabled || warehouse.receptionStatus !== undefined
+                              && warehouse.receptionStatus !== 'PENDIENTE_ACTA'}
+                          />
+                          Entrega final
+                        </label>
+                      </fieldset>
                       <div className="donation-field">
                         <label htmlFor={`${warehouse.id}-warehouse`}>Nombre de almacén</label>
                         <input

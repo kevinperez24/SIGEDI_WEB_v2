@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
 import {
-  createDonationActa,
+  createTypedDonationActa,
   createDonationIncome,
   deleteDonationIncome,
   deleteDonationDocument,
@@ -10,6 +10,8 @@ import {
   getDonationDetail,
   getDonationIncomes,
   getDonationActa,
+  getDonationActaById,
+  getDonationActas,
   getDonationDocument,
   getDistributionPlaces,
   getReceptionPlaces,
@@ -27,6 +29,7 @@ import type {
   DonationDocumentItem,
   DonationDocumentType,
   DonationDraftInput,
+  DonationIncome,
   ReceptionPlace,
   Section5CatalogItem,
   UpcRepresentative,
@@ -44,6 +47,7 @@ import DonationWarehousesSection, {
   type DonationWarehouseDraft,
   validateDonationWarehouses,
 } from './DonationWarehousesSection'
+import DonationProvisionalActsSection from './DonationProvisionalActsSection'
 import '../pages/DonativoMonetarioForm.css'
 import './DonationDraftModal.css'
 
@@ -175,6 +179,8 @@ function DonationDetailModal({
   const [detail, setDetail] = useState<DonationDetail | null>(null)
   const [documents, setDocuments] = useState<DonationDocumentItem[]>([])
   const [activeActa, setActiveActa] = useState<DonationActaSummary | null>(null)
+  const [actas, setActas] = useState<DonationActaSummary[]>([])
+  const [incomes, setIncomes] = useState<DonationIncome[]>([])
   const [form, setForm] = useState<DonationDraftInput | null>(null)
   const [pendingDocuments, setPendingDocuments] = useState<
     Partial<Record<DonationDocumentType, File>>
@@ -186,8 +192,8 @@ function DonationDetailModal({
   const [isEditing, setIsEditing] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
-  const [isGeneratingActa, setIsGeneratingActa] = useState(false)
   const [isOpeningActa, setIsOpeningActa] = useState(false)
+  const [pendingActaAction, setPendingActaAction] = useState('')
   const [message, setMessage] = useState('')
   const [hasError, setHasError] = useState(false)
   const [receptionPlaces, setReceptionPlaces] = useState<ReceptionPlace[]>([])
@@ -217,15 +223,18 @@ function DonationDetailModal({
     setMessage('')
     setHasError(false)
     try {
-      const [result, incomes] = await Promise.all([
+      const [result, loadedIncomes, loadedActas] = await Promise.all([
         getDonationDetail(donationId, authToken),
         getDonationIncomes(donationId, authToken),
+        getDonationActas(donationId, authToken),
       ])
       setDetail(result.donativo)
       setDocuments(result.documentos)
       setActiveActa(result.acta)
       setForm(toForm(result.donativo))
-      const incomeDrafts = incomes.map((income) => donationIncomeToDraft(income, false))
+      setIncomes(loadedIncomes)
+      setActas(loadedActas)
+      const incomeDrafts = loadedIncomes.map((income) => donationIncomeToDraft(income, false))
       setWarehouseGroups(incomeDrafts)
       setOriginalWarehouseGroups(incomeDrafts)
     } catch {
@@ -371,22 +380,6 @@ function DonationDetailModal({
     setIsEditing(true)
   }
 
-  const generateActa = async () => {
-    if (isGeneratingActa) return
-    setIsGeneratingActa(true)
-    setMessage('')
-    setHasError(false)
-    try {
-      setActiveActa(await createDonationActa(donationId, authToken))
-      setMessage('Acta generada correctamente.')
-    } catch {
-      setHasError(true)
-      setMessage('No fue posible generar el acta en este momento.')
-    } finally {
-      setIsGeneratingActa(false)
-    }
-  }
-
   const viewActa = async () => {
     if (!activeActa || isOpeningActa) return
     const previewWindow = window.open('about:blank', '_blank')
@@ -409,6 +402,46 @@ function DonationDetailModal({
       setMessage('No fue posible abrir el acta.')
     } finally {
       setIsOpeningActa(false)
+    }
+  }
+
+  const generateTypedActa = async (incomeId: string) => {
+    if (pendingActaAction) return
+    setPendingActaAction(incomeId)
+    setMessage('')
+    setHasError(false)
+    try {
+      const created = await createTypedDonationActa(
+        donationId,
+        { income_id: incomeId },
+        authToken,
+      )
+      await loadDetail()
+      if (created.es_acta_final) setActiveActa(created)
+      setMessage(created.es_acta_final
+        ? 'Acta final generada correctamente.'
+        : 'Acta provisional generada correctamente.')
+    } catch {
+      setHasError(true)
+      setMessage('No fue posible generar el acta en este momento.')
+    } finally {
+      setPendingActaAction('')
+    }
+  }
+
+  const viewTypedActa = async (acta: DonationActaSummary) => {
+    const previewWindow = window.open('about:blank', '_blank')
+    if (previewWindow) previewWindow.opener = null
+    try {
+      const blob = await getDonationActaById(donationId, acta.id, authToken)
+      const url = URL.createObjectURL(blob)
+      if (!previewWindow) throw new Error('Vista previa bloqueada')
+      previewWindow.location.href = url
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch {
+      previewWindow?.close()
+      setHasError(true)
+      setMessage('No fue posible abrir el acta.')
     }
   }
 
@@ -711,7 +744,7 @@ function DonationDetailModal({
               className="detail-edit-button"
               type="button"
               onClick={onClose}
-              disabled={isSaving || isGeneratingActa}
+              disabled={isSaving || Boolean(pendingActaAction)}
             >
               Volver al listado
             </button>
@@ -720,7 +753,7 @@ function DonationDetailModal({
                 className="detail-edit-button"
                 type="button"
                 onClick={startEditing}
-                disabled={!detail || isSaving || isGeneratingActa}
+                disabled={!detail || isSaving || Boolean(pendingActaAction)}
               >
                 Editar
               </button>
@@ -728,21 +761,31 @@ function DonationDetailModal({
             <button
               className="detail-edit-button"
               type="button"
-              onClick={() => void generateActa()}
-              disabled={!detail || isEditing || isSaving || isGeneratingActa}
+              onClick={() => setActiveSection(11)}
+              disabled={!detail || isEditing || isSaving || Boolean(pendingActaAction)}
             >
-              {isGeneratingActa ? 'Generando...' : 'Crear acta'}
+              Gestionar actas
             </button>
             {activeActa && (
               <button
                 className="detail-edit-button"
                 type="button"
                 onClick={() => void viewActa()}
-                disabled={isOpeningActa || isGeneratingActa}
+                disabled={isOpeningActa || Boolean(pendingActaAction)}
               >
-                Ver Acta
+                Ver Acta Final
               </button>
             )}
+            <button
+              className="detail-edit-button donation-detail-close-button"
+              type="button"
+              onClick={onClose}
+              disabled={isSaving || Boolean(pendingActaAction)}
+              aria-label="Cerrar detalle"
+              title="Cerrar"
+            >
+              ×
+            </button>
           </div>
       </header>
 
@@ -1132,6 +1175,17 @@ function DonationDetailModal({
                     {photoDocumentSlots.map(renderDocumentSlot)}
                   </div>
                 </section>
+
+                {activeSection === 11 && (
+                  <DonationProvisionalActsSection
+                    incomes={incomes}
+                    actas={actas}
+                    isLoading={isLoading}
+                    pendingAction={pendingActaAction}
+                    onGenerate={(incomeId) => void generateTypedActa(incomeId)}
+                    onView={(acta) => void viewTypedActa(acta)}
+                  />
+                )}
               </>
             )}
             {detail && <div className={`donation-form-message${hasError ? ' donation-form-message--error' : ''}`} role={hasError ? 'alert' : 'status'}>{message}</div>}

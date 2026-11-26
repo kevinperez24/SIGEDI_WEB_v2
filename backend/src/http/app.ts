@@ -17,6 +17,7 @@ import {
   DonationActaValidationError,
 } from '../donativos/donativo-acta.service.ts'
 import type {
+  CreateDonationActaInput,
   DonationActaSummary,
   DownloadedDonationActa,
 } from '../donativos/donativo-acta.types.ts'
@@ -85,6 +86,16 @@ type CreateDonationActa = (
 ) => Promise<DonationActaSummary>
 type GetActiveDonationActa = (donativoId: string) => Promise<DonationActaSummary | null>
 type DownloadDonationActa = (donativoId: string) => Promise<DownloadedDonationActa>
+type CreateTypedDonationActa = (
+  donativoId: string,
+  createdBy: string,
+  input: CreateDonationActaInput,
+) => Promise<DonationActaSummary>
+type ListDonationActas = (donativoId: string) => Promise<DonationActaSummary[]>
+type DownloadDonationActaById = (
+  donativoId: string,
+  actaId: string,
+) => Promise<DownloadedDonationActa>
 type ListReceptionPlaces = () => Promise<ReceptionPlace[]>
 type ValidateReceptionPlaces = (ids: string[]) => Promise<boolean>
 type ListUpcRepresentatives = () => Promise<UpcRepresentative[]>
@@ -127,6 +138,9 @@ type AppDependencies = {
   createDonationActa: CreateDonationActa
   getActiveDonationActa: GetActiveDonationActa
   downloadDonationActa: DownloadDonationActa
+  createTypedDonationActa: CreateTypedDonationActa
+  listDonationActas: ListDonationActas
+  downloadDonationActaById: DownloadDonationActaById
   listReceptionPlaces: ListReceptionPlaces
   validateReceptionPlaces: ValidateReceptionPlaces
   listUpcRepresentatives: ListUpcRepresentatives
@@ -181,6 +195,7 @@ const DONATION_FIELDS = new Set([
 ])
 
 const INCOME_FIELDS = new Set([
+  'tipo_recepcion',
   'nombre_almacen',
   'nombre_proveedor',
   'fecha_recepcion_donacion',
@@ -188,11 +203,20 @@ const INCOME_FIELDS = new Set([
   'productos',
 ])
 const INCOME_PRODUCT_FIELDS = new Set(['id', 'brand_name', 'name_product', 'amount', 'price'])
+const ACTA_FIELDS = new Set(['income_id'])
 
 class RequestBodyError extends Error {
   constructor(readonly statusCode: number) {
     super('Cuerpo de solicitud inválido.')
   }
+}
+
+function validateActaBody(value: unknown): CreateDonationActaInput | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  if (Object.keys(candidate).some((key) => !ACTA_FIELDS.has(key))) return null
+  if (typeof candidate.income_id !== 'string' || !candidate.income_id.trim()) return null
+  return { income_id: candidate.income_id.trim() }
 }
 
 function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
@@ -553,8 +577,10 @@ function validateIncomeBody(body: unknown): DonationIncomeInput | null {
   const fecha_recepcion_donacion = readString('fecha_recepcion_donacion', 10)
   const description = readString('description', 5_000, false)
   const productos = candidate.productos
+  const tipo_recepcion = candidate.tipo_recepcion
 
   if (
+    (tipo_recepcion !== 'PARCIAL' && tipo_recepcion !== 'FINAL') ||
     nombre_almacen === null ||
     nombre_proveedor === null ||
     fecha_recepcion_donacion === null ||
@@ -594,6 +620,7 @@ function validateIncomeBody(body: unknown): DonationIncomeInput | null {
   if (normalizedProducts.some((product) => product === null)) return null
 
   return {
+    tipo_recepcion,
     nombre_almacen,
     nombre_proveedor,
     fecha_recepcion_donacion,
@@ -642,6 +669,9 @@ export function createRequestHandler({
   createDonationActa,
   getActiveDonationActa,
   downloadDonationActa,
+  createTypedDonationActa,
+  listDonationActas,
+  downloadDonationActaById,
   listReceptionPlaces,
   validateReceptionPlaces,
   listUpcRepresentatives,
@@ -697,6 +727,12 @@ export function createRequestHandler({
     const isDonationDocumentItemRoute = donationDocumentItemMatch !== null
     const donationActaMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)\/acta$/)
     const isDonationActaRoute = donationActaMatch !== null
+    const donationActasMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)\/actas$/)
+    const isDonationActasRoute = donationActasMatch !== null
+    const donationActaItemMatch = url.pathname.match(
+      /^\/api\/donativos\/([^/]+)\/actas\/([^/]+)$/,
+    )
+    const isDonationActaItemRoute = donationActaItemMatch !== null
     const donationIncomeMatch = url.pathname.match(/^\/api\/donativos\/([^/]+)\/incomes$/)
     const isDonationIncomeRoute = donationIncomeMatch !== null
     const donationIncomeItemMatch = url.pathname.match(
@@ -717,6 +753,8 @@ export function createRequestHandler({
       !isDonationDocumentRoute &&
       !isDonationDocumentItemRoute &&
       !isDonationActaRoute &&
+      !isDonationActasRoute &&
+      !isDonationActaItemRoute &&
       !isDonationIncomeRoute &&
       !isDonationIncomeItemRoute &&
       !isDonationDetailRoute
@@ -737,6 +775,10 @@ export function createRequestHandler({
           ? request.method === 'PATCH' || request.method === 'DELETE'
         : isDonationActaRoute
           ? request.method === 'GET' || request.method === 'POST'
+        : isDonationActasRoute
+          ? request.method === 'GET' || request.method === 'POST'
+        : isDonationActaItemRoute
+          ? request.method === 'GET'
         : isDonationDocumentItemRoute
           ? request.method === 'GET' || request.method === 'DELETE'
           : request.method === 'POST'
@@ -756,6 +798,10 @@ export function createRequestHandler({
               ? 'PATCH, DELETE, OPTIONS'
             : isDonationActaRoute
               ? 'GET, POST, OPTIONS'
+            : isDonationActasRoute
+              ? 'GET, POST, OPTIONS'
+            : isDonationActaItemRoute
+              ? 'GET, OPTIONS'
             : isDonationDocumentItemRoute
               ? 'GET, DELETE, OPTIONS'
               : 'POST, OPTIONS',
@@ -943,6 +989,34 @@ export function createRequestHandler({
         }
 
         const acta = await createDonationActa(donativoId, currentUser)
+        sendJson(response, 201, { ok: true, acta })
+        return
+      }
+
+      if (isDonationActasRoute || isDonationActaItemRoute) {
+        const token = readBearerToken(request)
+        const currentUser = token ? resolveSession(token) : null
+        if (!currentUser) {
+          sendJson(response, 401, { ok: false, message: 'Debe iniciar sesión nuevamente.' })
+          return
+        }
+        const routeMatch = donationActaItemMatch ?? donationActasMatch
+        const donativoId = decodeURIComponent(routeMatch?.[1] ?? '')
+        if (isDonationActaItemRoute) {
+          const actaId = decodeURIComponent(donationActaItemMatch?.[2] ?? '')
+          sendDocument(response, await downloadDonationActaById(donativoId, actaId))
+          return
+        }
+        if (request.method === 'GET') {
+          sendJson(response, 200, { ok: true, actas: await listDonationActas(donativoId) })
+          return
+        }
+        const actaBody = validateActaBody(await readJsonBody(request))
+        if (!actaBody) {
+          sendJson(response, 400, { ok: false, message: 'Los datos del acta son inválidos.' })
+          return
+        }
+        const acta = await createTypedDonationActa(donativoId, currentUser, actaBody)
         sendJson(response, 201, { ok: true, acta })
         return
       }
@@ -1207,14 +1281,14 @@ export function createRequestHandler({
       }
 
       if (error instanceof DonationActaValidationError) {
-        sendJson(response, 400, { ok: false, message: 'El identificador del donativo no es válido.' })
+        sendJson(response, 400, { ok: false, message: 'No fue posible validar los datos del acta.' })
         return
       }
 
       if (error instanceof DonationActaNotFoundError) {
         sendJson(response, 404, {
           ok: false,
-          message: isDonationActaRoute && request.method === 'GET'
+          message: (isDonationActaRoute || isDonationActaItemRoute) && request.method === 'GET'
             ? 'El acta activa no existe.'
             : 'El donativo no existe.',
         })
@@ -1241,7 +1315,7 @@ export function createRequestHandler({
       }
 
       if (error instanceof DonationIncomeValidationError) {
-        sendJson(response, 400, { ok: false, message: 'El identificador de la recepción no es válido.' })
+        sendJson(response, 400, { ok: false, message: 'No fue posible validar la recepción.' })
         return
       }
 
@@ -1272,7 +1346,7 @@ export function createRequestHandler({
           ? 'catalogos'
           : isDonationDocumentRoute || isDonationDocumentItemRoute
           ? 'donativo_documentos'
-          : isDonationActaRoute
+          : isDonationActaRoute || isDonationActasRoute || isDonationActaItemRoute
             ? 'donativo_actas'
           : isDonationIncomeRoute || isDonationIncomeItemRoute
             ? 'donativo_incomes'
@@ -1287,7 +1361,7 @@ export function createRequestHandler({
           ? 'No fue posible cargar el catálogo solicitado.'
           : isDonationDocumentRoute || isDonationDocumentItemRoute
           ? 'No fue posible guardar el documento en este momento.'
-          : isDonationActaRoute
+          : isDonationActaRoute || isDonationActasRoute || isDonationActaItemRoute
             ? request.method === 'GET'
               ? 'No fue posible abrir el acta en este momento.'
               : 'No fue posible generar el acta en este momento.'

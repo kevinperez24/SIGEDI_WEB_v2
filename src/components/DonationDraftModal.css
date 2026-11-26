@@ -82,6 +82,12 @@
   opacity: 0.55;
 }
 
+.donation-detail-close-button {
+  width: 37px;
+  padding: 0;
+  font-size: 1.15rem;
+}
+
 .modal-secondary-button:focus-visible,
 .modal-primary-button:focus-visible {
   outline: 3px solid rgba(18, 133, 177, 0.32);

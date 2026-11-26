@@ -138,6 +138,16 @@ export type DonationActaSummary = {
   version: number
   estado: 'ACTIVA'
   nombre_archivo: string
+  codigo_acta: string
+  tipo_acta: 'PROVISIONAL' | 'FINAL'
+  numero_entrega: number
+  income_ids: string[]
+  actas_referencia: string[]
+  es_acta_final: boolean
+}
+
+export type CreateDonationActaInput = {
+  income_id: string
 }
 
 export type DonationIncomeProductInput = {
@@ -149,6 +159,7 @@ export type DonationIncomeProductInput = {
 }
 
 export type DonationIncomeInput = {
+  tipo_recepcion: 'PARCIAL' | 'FINAL'
   nombre_almacen: string
   nombre_proveedor: string
   fecha_recepcion_donacion: string
@@ -165,6 +176,8 @@ export type DonationIncomeProduct = Omit<DonationIncomeProductInput, 'id'> & {
 export type DonationIncome = Omit<DonationIncomeInput, 'productos'> & {
   id: string
   donativo_id: string
+  numero_entrega: number
+  estado_recepcion: 'PENDIENTE_ACTA' | 'DOCUMENTADA' | 'FINALIZADA'
   productos: DonationIncomeProduct[]
 }
 
@@ -203,6 +216,10 @@ type DonationDetailResponse =
 
 type DonationActaResponse =
   | { ok: true; acta: DonationActaSummary }
+  | { ok: false; message: string }
+
+type DonationActaListResponse =
+  | { ok: true; actas: DonationActaSummary[] }
   | { ok: false; message: string }
 
 type DonationUpdateResponse =
@@ -525,6 +542,63 @@ export async function getDonationActa(
 ): Promise<Blob> {
   const response = await fetch(
     `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/acta`,
+    { headers: { Authorization: `Bearer ${authToken}` } },
+  ).catch(() => null)
+  if (!response?.ok) throw new DonationActaError('No fue posible abrir el acta.')
+  return response.blob()
+}
+
+export async function getDonationActas(
+  donationId: string,
+  authToken: string,
+): Promise<DonationActaSummary[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/actas`,
+    { headers: { Authorization: `Bearer ${authToken}` } },
+  ).catch(() => null)
+  const result = response
+    ? (await response.json().catch(() => null)) as DonationActaListResponse | null
+    : null
+  if (!response?.ok || !result?.ok) {
+    throw new DonationActaError('No fue posible cargar las actas.')
+  }
+  return result.actas
+}
+
+export async function createTypedDonationActa(
+  donationId: string,
+  input: CreateDonationActaInput,
+  authToken: string,
+): Promise<DonationActaSummary> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/actas`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(input),
+    },
+  ).catch(() => null)
+  const result = response
+    ? (await response.json().catch(() => null)) as DonationActaResponse | null
+    : null
+  if (!response?.ok || !result?.ok) {
+    throw new DonationActaError(
+      result && !result.ok ? result.message : 'No fue posible generar el acta.',
+    )
+  }
+  return result.acta
+}
+
+export async function getDonationActaById(
+  donationId: string,
+  actaId: string,
+  authToken: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/donativos/${encodeURIComponent(donationId)}/actas/${encodeURIComponent(actaId)}`,
     { headers: { Authorization: `Bearer ${authToken}` } },
   ).catch(() => null)
   if (!response?.ok) throw new DonationActaError('No fue posible abrir el acta.')

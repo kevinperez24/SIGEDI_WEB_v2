@@ -31,12 +31,15 @@ const donationService = new DonationService(new SurrealDonationRepository())
 const donationDocumentService = new DonationDocumentService(
   new SurrealDonationDocumentRepository(),
 )
+const donationIncomeService = new DonationIncomeService(
+  new SurrealDonationIncomeRepository(),
+)
 const donationActaService = new DonationActaService(
   new SurrealDonationActaRepository(),
   (donativoId) => donationService.findById(donativoId),
-)
-const donationIncomeService = new DonationIncomeService(
-  new SurrealDonationIncomeRepository(),
+  undefined,
+  undefined,
+  (donativoId) => donationIncomeService.list(donativoId),
 )
 const receptionPlaceCatalogRepository = new ReceptionPlaceCatalogRepository()
 const upcRepresentativeCatalogRepository = new UpcRepresentativeCatalogRepository()
@@ -65,6 +68,11 @@ const server = createServer(
       donationActaService.generate(donativoId, createdBy),
     getActiveDonationActa: (donativoId) => donationActaService.findActive(donativoId),
     downloadDonationActa: (donativoId) => donationActaService.download(donativoId),
+    createTypedDonationActa: (donativoId, createdBy, input) =>
+      donationActaService.generateTyped(donativoId, createdBy, input),
+    listDonationActas: (donativoId) => donationActaService.listActive(donativoId),
+    downloadDonationActaById: (donativoId, actaId) =>
+      donationActaService.downloadById(donativoId, actaId),
     listReceptionPlaces: () => receptionPlaceCatalogRepository.listActive(),
     validateReceptionPlaces: (ids) => receptionPlaceCatalogRepository.validateActiveIds(ids),
     listUpcRepresentatives: () => upcRepresentativeCatalogRepository.listActive(),

@@ -1558,6 +1558,22 @@ function DonationDraftModal({
               </div>
             </section>
 
+            <section
+              className="donation-form-section"
+              id="donation-section-11-panel"
+              role="tabpanel"
+              aria-labelledby="donation-section-11-tab"
+              hidden={activeSection !== 11}
+            >
+              <div className="donation-section-heading">
+                <span>Sección 11</span>
+                <h3>Actas de recepción</h3>
+              </div>
+              <p className="detail-modal-state">
+                Las actas estarán disponibles después de guardar el donativo y registrar sus recepciones.
+              </p>
+            </section>
+
             <div
               className={`donation-form-message${
                 statusType === 'error' ? ' donation-form-message--error' : ''

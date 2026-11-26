@@ -20,6 +20,11 @@ import type {
   DonationIncome,
   DonationIncomeInput,
 } from '../donativos/donativo-income.types.ts'
+import type { DonationIncomeRepository } from '../donativos/donativo-income.repository.ts'
+import {
+  DonationIncomeService,
+  DonationIncomeValidationError,
+} from '../donativos/donativo-income.service.ts'
 import { calculateIncomeProductTotal } from '../donativos/donativo-income.types.ts'
 import {
   DonationDeletionError,
@@ -41,7 +46,11 @@ import {
 import type { DownloadedDonationDocument } from '../donativos/donativo-document.service.ts'
 import type { DonationActaRepository } from '../donativos/donativo-acta.repository.ts'
 import { DonationActaService, DonationActaValidationError } from '../donativos/donativo-acta.service.ts'
-import type { DonationActaSummary, DownloadedDonationActa } from '../donativos/donativo-acta.types.ts'
+import type {
+  CreateDonationActaInput,
+  DonationActaSummary,
+  DownloadedDonationActa,
+} from '../donativos/donativo-acta.types.ts'
 import type { ReceptionPlace } from '../catalogos/lugar-recepcion.repository.ts'
 import type { UpcRepresentative } from '../catalogos/representante-upc.repository.ts'
 import type { Section5CatalogItem } from '../catalogos/seccion5.repository.ts'
@@ -133,6 +142,16 @@ type TestServerOverrides = {
   ) => Promise<DonationActaSummary>
   getActiveDonationActa?: (donativoId: string) => Promise<DonationActaSummary | null>
   downloadDonationActa?: (donativoId: string) => Promise<DownloadedDonationActa>
+  createTypedDonationActa?: (
+    donativoId: string,
+    createdBy: string,
+    input: CreateDonationActaInput,
+  ) => Promise<DonationActaSummary>
+  listDonationActas?: (donativoId: string) => Promise<DonationActaSummary[]>
+  downloadDonationActaById?: (
+    donativoId: string,
+    actaId: string,
+  ) => Promise<DownloadedDonationActa>
   listReceptionPlaces?: () => Promise<ReceptionPlace[]>
   validateReceptionPlaces?: (ids: string[]) => Promise<boolean>
   listUpcRepresentatives?: () => Promise<UpcRepresentative[]>
@@ -200,6 +219,13 @@ async function startTestServer(
       downloadDonationActa: overrides.downloadDonationActa ?? (async () => {
         throw new Error('No debe ejecutarse')
       }),
+      createTypedDonationActa: overrides.createTypedDonationActa ?? (async () => {
+        throw new Error('No debe ejecutarse')
+      }),
+      listDonationActas: overrides.listDonationActas ?? (async () => []),
+      downloadDonationActaById: overrides.downloadDonationActaById ?? (async () => {
+        throw new Error('No debe ejecutarse')
+      }),
       listReceptionPlaces: overrides.listReceptionPlaces ?? (async () => []),
       validateReceptionPlaces: overrides.validateReceptionPlaces ?? (async () => true),
       listUpcRepresentatives: overrides.listUpcRepresentatives ?? (async () => []),
@@ -241,6 +267,7 @@ async function startTestServer(
 
 describe('API de recepciones y productos', () => {
   const input: DonationIncomeInput = {
+    tipo_recepcion: 'PARCIAL',
     nombre_almacen: 'Almacén central',
     nombre_proveedor: 'Proveedor institucional',
     fecha_recepcion_donacion: '2026-11-25',
@@ -254,6 +281,9 @@ describe('API de recepciones y productos', () => {
   const makeIncome = (id = 'incomes:income1'): DonationIncome => ({
     id,
     donativo_id: 'donativos:donation1',
+    tipo_recepcion: input.tipo_recepcion,
+    numero_entrega: id.endsWith('2') ? 2 : 1,
+    estado_recepcion: 'PENDIENTE_ACTA',
     nombre_almacen: input.nombre_almacen,
     nombre_proveedor: input.nombre_proveedor,
     fecha_recepcion_donacion: '2026-11-25T00:00:00.000Z',
@@ -401,6 +431,60 @@ describe('API de recepciones y productos', () => {
     })
 
     assert.equal(response.status, 500)
+  })
+})
+
+describe('DonationIncomeService', () => {
+  test('asigna entregas secuenciales y cierra nuevas recepciones después de FINAL', async () => {
+    const stored: DonationIncome[] = []
+    const repository: DonationIncomeRepository = {
+      create: async (donativoId, createdBy, input, numeroEntrega) => {
+        const income: DonationIncome = {
+          ...input,
+          id: `incomes:entrega${numeroEntrega}`,
+          donativo_id: donativoId,
+          numero_entrega: numeroEntrega,
+          estado_recepcion: 'PENDIENTE_ACTA',
+          created_by: createdBy,
+          created_at: '2026-11-26T12:00:00.000Z',
+          updated_by: null,
+          updated_at: '2026-11-26T12:00:00.000Z',
+          productos: [],
+        }
+        stored.push(income)
+        return income
+      },
+      list: async () => stored,
+      update: async () => null,
+      delete: async () => false,
+    }
+    const service = new DonationIncomeService(repository)
+    const baseInput: DonationIncomeInput = {
+      tipo_recepcion: 'PARCIAL',
+      nombre_almacen: 'Almacén',
+      nombre_proveedor: 'Proveedor',
+      fecha_recepcion_donacion: '2026-11-26',
+      description: '',
+      productos: [],
+    }
+
+    const first = await service.create('donativos:prueba', 'usuarios:creador', baseInput)
+    const final = await service.create('donativos:prueba', 'usuarios:creador', {
+      ...baseInput,
+      tipo_recepcion: 'FINAL',
+    })
+
+    assert.equal(first.numero_entrega, 1)
+    assert.equal(final.numero_entrega, 2)
+    await assert.rejects(
+      service.create('donativos:prueba', 'usuarios:creador', baseInput),
+      DonationIncomeValidationError,
+    )
+    first.estado_recepcion = 'DOCUMENTADA'
+    await assert.rejects(
+      service.delete('donativos:prueba', first.id),
+      DonationIncomeValidationError,
+    )
   })
 })
 
@@ -1169,6 +1253,12 @@ describe('consulta y edición de donativos', () => {
           version: metadata.version,
           estado: 'ACTIVA',
           nombre_archivo: metadata.originalName,
+          codigo_acta: metadata.codigoActa,
+          tipo_acta: metadata.tipoActa,
+          numero_entrega: metadata.numeroEntrega,
+          income_ids: metadata.incomeIds,
+          actas_referencia: metadata.actasReferencia,
+          es_acta_final: metadata.esActaFinal,
           ruta: metadata.relativePath,
         }
         records.push(created)
@@ -1185,12 +1275,39 @@ describe('consulta y edición de donativos', () => {
             }
           : null
       },
+      listActive: async () => records.filter((record) => record.estado === 'ACTIVA'),
+      findActiveFileById: async (_donativoId, actaId) => {
+        const record = records.find((item) => item.id === actaId && item.estado === 'ACTIVA')
+        return record
+          ? {
+              nombre_archivo: record.nombre_archivo,
+              ruta_archivo: record.ruta,
+              mime_type: 'application/pdf',
+            }
+          : null
+      },
     }
     const service = new DonationActaService(
       repository,
       async () => detail,
       join(temporaryStorage, 'donativos'),
       temporaryStorage,
+      async () => [{
+        id: 'incomes:final1',
+        donativo_id: 'donativos:prueba',
+        tipo_recepcion: 'FINAL',
+        numero_entrega: 1,
+        estado_recepcion: 'PENDIENTE_ACTA',
+        nombre_almacen: 'Almacén principal',
+        nombre_proveedor: 'Proveedor',
+        fecha_recepcion_donacion: '2026-11-26T00:00:00.000Z',
+        description: '',
+        created_by: 'usuarios:creador',
+        created_at: '2026-11-26T12:00:00.000Z',
+        updated_by: null,
+        updated_at: '2026-11-26T12:00:00.000Z',
+        productos: [],
+      }],
     )
 
     try {
@@ -1199,10 +1316,13 @@ describe('consulta y edición de donativos', () => {
       const downloaded = await service.download('donativos:prueba')
 
       assert.equal(first.version, 1)
+      assert.equal(first.es_acta_final, true)
+      assert.equal(first.numero_entrega, 1)
+      assert.equal(records.filter((record) => record.tipo_acta === 'PROVISIONAL').length, 0)
       assert.equal(second.version, 2)
       assert.equal(records[0]?.estado, 'REEMPLAZADA')
       assert.equal(records[1]?.estado, 'ACTIVA')
-      assert.match(records[1]?.ruta ?? '', /^donativos\/prueba\/actas\/acta_donacion_v2_[\w-]+\.pdf$/)
+      assert.match(records[1]?.ruta ?? '', /^donativos\/prueba\/actas\/acta_final_v2_[\w-]+\.pdf$/)
       assert.equal(downloaded.mimeType, 'application/pdf')
       assert.equal(downloaded.contents.subarray(0, 5).toString(), '%PDF-')
       assert.ok((await stat(join(temporaryStorage, records[0]?.ruta ?? ''))).isFile())
@@ -1216,6 +1336,142 @@ describe('consulta y edición de donativos', () => {
     }
   })
 
+  test('genera actas parciales y final con ingresos, productos y referencias correctas', async () => {
+    const temporaryStorage = await mkdtemp(join(tmpdir(), 'sigedi-actas-parciales-'))
+    const records: Array<DonationActaSummary & { ruta: string; active: boolean }> = []
+    const receptionTransitions: Array<[string, string]> = []
+    const makeIncome = (index: number): DonationIncome => {
+      const incomeId = `incomes:entrega${index}`
+      return {
+        id: incomeId,
+        donativo_id: 'donativos:prueba',
+        tipo_recepcion: index === 3 ? 'FINAL' : 'PARCIAL',
+        numero_entrega: index,
+        estado_recepcion: 'PENDIENTE_ACTA',
+        nombre_almacen: `Almacén ${index}`,
+        nombre_proveedor: `Proveedor ${index}`,
+        fecha_recepcion_donacion: `2026-11-${20 + index}T00:00:00.000Z`,
+        description: `Recepción ${index}`,
+        created_by: 'usuarios:creador',
+        created_at: '2026-11-20T12:00:00.000Z',
+        updated_by: null,
+        updated_at: '2026-11-20T12:00:00.000Z',
+        productos: Array.from({ length: 12 }, (_, productIndex) => ({
+          id: `detincomes:producto${index}_${productIndex + 1}`,
+          income_id: incomeId,
+          brand_name: `Marca ${index}`,
+          name_product: `Producto ${index}.${productIndex + 1}`,
+          amount: productIndex + 1,
+          price: 10.25,
+          total_price: calculateIncomeProductTotal(productIndex + 1, 10.25),
+          created_by: 'usuarios:creador',
+          created_at: '2026-11-20T12:00:00.000Z',
+          updated_by: null,
+          updated_at: '2026-11-20T12:00:00.000Z',
+        })),
+      }
+    }
+    const incomes = [makeIncome(1), makeIncome(2), makeIncome(3)]
+    const repository: DonationActaRepository = {
+      nextVersion: async (_donativoId, tipoActa, numeroEntrega) =>
+        records.filter((record) => record.tipo_acta === tipoActa && (
+          tipoActa === 'FINAL' || record.numero_entrega === numeroEntrega
+        )).length + 1,
+      createVersion: async (metadata) => {
+        receptionTransitions.push([metadata.targetIncomeId, metadata.receptionState])
+        for (const record of records) {
+          if (record.active && record.tipo_acta === metadata.tipoActa && (
+            metadata.esActaFinal || record.numero_entrega === metadata.numeroEntrega
+          )) record.active = false
+        }
+        const created: DonationActaSummary & { ruta: string; active: boolean } = {
+          id: `donativo_actas:${records.length + 1}`,
+          version: metadata.version,
+          estado: 'ACTIVA',
+          nombre_archivo: metadata.originalName,
+          codigo_acta: metadata.codigoActa,
+          tipo_acta: metadata.tipoActa,
+          numero_entrega: metadata.numeroEntrega,
+          income_ids: metadata.incomeIds,
+          actas_referencia: metadata.actasReferencia,
+          es_acta_final: metadata.esActaFinal,
+          ruta: metadata.relativePath,
+          active: true,
+        }
+        records.push(created)
+        return created
+      },
+      findActive: async () => records.find((record) => record.active && record.es_acta_final) ?? null,
+      findActiveFile: async () => null,
+      listActive: async () => records.filter((record) => record.active),
+      findActiveFileById: async () => null,
+    }
+    const service = new DonationActaService(
+      repository,
+      async () => detail,
+      join(temporaryStorage, 'donativos'),
+      temporaryStorage,
+      async () => incomes,
+    )
+
+    try {
+      const first = await service.generateTyped('donativos:prueba', 'usuarios:creador', {
+        income_id: incomes[0]!.id,
+      })
+      const secondV1 = await service.generateTyped('donativos:prueba', 'usuarios:creador', {
+        income_id: incomes[1]!.id,
+      })
+      const second = await service.generateTyped('donativos:prueba', 'usuarios:creador', {
+        income_id: incomes[1]!.id,
+      })
+      assert.equal(secondV1.version, 1)
+      assert.equal(second.version, 2)
+      assert.equal(records.filter((record) => record.active
+        && record.tipo_acta === 'PROVISIONAL'
+        && record.numero_entrega === 2).length, 1)
+      const final = await service.generateTyped('donativos:prueba', 'usuarios:creador', {
+        income_id: incomes[2]!.id,
+      })
+
+      assert.deepEqual(first.income_ids, [incomes[0]!.id])
+      assert.match(first.codigo_acta, /^AP-2026-\d{6}-01$/)
+      assert.equal(secondV1.codigo_acta, second.codigo_acta)
+      assert.deepEqual(second.actas_referencia, [first.id])
+      assert.deepEqual(final.income_ids, incomes.map((income) => income.id))
+      assert.deepEqual(final.actas_referencia, [first.id, second.id])
+      assert.equal(final.numero_entrega, 3)
+      assert.match(final.codigo_acta, /^AF-2026-\d{6}-03$/)
+      assert.deepEqual(receptionTransitions.slice(0, 4), [
+        [incomes[0]!.id, 'DOCUMENTADA'],
+        [incomes[1]!.id, 'DOCUMENTADA'],
+        [incomes[1]!.id, 'DOCUMENTADA'],
+        [incomes[2]!.id, 'FINALIZADA'],
+      ])
+      assert.equal((await service.listActive('donativos:prueba')).length, 3)
+      await assert.rejects(
+        service.generateTyped('donativos:prueba', 'usuarios:creador', {
+          income_id: incomes[0]!.id,
+        }),
+        DonationActaValidationError,
+      )
+      const finalRecord = records.find((record) => record.id === final.id)
+      const finalPath = join(temporaryStorage, finalRecord?.ruta ?? '')
+      assert.ok((await stat(finalPath)).isFile())
+      const finalPdf = await readFile(finalPath)
+      assert.ok((finalPdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length > 1)
+
+      const regeneratedFinal = await service.generateTyped(
+        'donativos:prueba',
+        'usuarios:creador',
+        { income_id: incomes[2]!.id },
+      )
+      assert.equal(regeneratedFinal.version, 2)
+      assert.equal(records.filter((record) => record.active && record.es_acta_final).length, 1)
+    } finally {
+      await rm(temporaryStorage, { recursive: true, force: true })
+    }
+  })
+
   test('POST crea el acta con la identidad autenticada y GET la entrega inline', async () => {
     const calls: string[] = []
     const acta: DonationActaSummary = {
@@ -1223,6 +1479,12 @@ describe('consulta y edición de donativos', () => {
       version: 1,
       estado: 'ACTIVA',
       nombre_archivo: 'acta_donacion_v1.pdf',
+      codigo_acta: 'AF-2026-000001-01',
+      tipo_acta: 'FINAL',
+      numero_entrega: 1,
+      income_ids: [],
+      actas_referencia: [],
+      es_acta_final: true,
     }
     const baseUrl = await startTestServer(
       async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
@@ -1261,6 +1523,85 @@ describe('consulta y edición de donativos', () => {
       'donativos:prueba',
       'usuarios:creador',
       'donativos:prueba',
+    ])
+  })
+
+  test('endpoints de actas parciales crean, listan y entregan un PDF autenticado', async () => {
+    const acta: DonationActaSummary = {
+      id: 'donativo_actas:parcial1',
+      version: 1,
+      estado: 'ACTIVA',
+      nombre_archivo: 'acta_provisional_entrega_1_v1.pdf',
+      codigo_acta: 'AP-2026-000001-01',
+      tipo_acta: 'PROVISIONAL',
+      numero_entrega: 1,
+      income_ids: ['incomes:entrega1'],
+      actas_referencia: [],
+      es_acta_final: false,
+    }
+    const calls: unknown[] = []
+    const baseUrl = await startTestServer(
+      async () => ({ ok: false, reason: 'USER_NOT_FOUND' }),
+      {
+        resolveSession: () => 'usuarios:creador',
+        createTypedDonationActa: async (donativoId, createdBy, input) => {
+          calls.push([donativoId, createdBy, input])
+          return acta
+        },
+        listDonationActas: async (donativoId) => {
+          calls.push(donativoId)
+          return [acta]
+        },
+        downloadDonationActaById: async (donativoId, actaId) => {
+          calls.push([donativoId, actaId])
+          return {
+            contents: Buffer.from('%PDF-1.7 parcial'),
+            name: acta.nombre_archivo,
+            mimeType: 'application/pdf',
+          }
+        },
+      },
+    )
+    const route = `${baseUrl}/api/donativos/donativos%3Aprueba/actas`
+    const postResponse = await fetch(route, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token-valido',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ income_id: 'incomes:entrega1' }),
+    })
+    const protectedFieldsResponse = await fetch(route, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token-valido',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        income_id: 'incomes:entrega1',
+        tipo_acta: 'FINAL',
+        version: 99,
+      }),
+    })
+    const listResponse = await fetch(route, {
+      headers: { Authorization: 'Bearer token-valido' },
+    })
+    const fileResponse = await fetch(`${route}/donativo_actas%3Aparcial1`, {
+      headers: { Authorization: 'Bearer token-valido' },
+    })
+
+    assert.equal(postResponse.status, 201)
+    assert.equal(protectedFieldsResponse.status, 400)
+    assert.deepEqual(await postResponse.json(), { ok: true, acta })
+    assert.deepEqual(await listResponse.json(), { ok: true, actas: [acta] })
+    assert.equal(fileResponse.status, 200)
+    assert.equal(fileResponse.headers.get('content-type'), 'application/pdf')
+    assert.deepEqual(calls, [
+      ['donativos:prueba', 'usuarios:creador', {
+        income_id: 'incomes:entrega1',
+      }],
+      'donativos:prueba',
+      ['donativos:prueba', 'donativo_actas:parcial1'],
     ])
   })
 

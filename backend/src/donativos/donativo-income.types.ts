@@ -7,6 +7,7 @@ export type DonationIncomeProductInput = {
 }
 
 export type DonationIncomeInput = {
+  tipo_recepcion: 'PARCIAL' | 'FINAL'
   nombre_almacen: string
   nombre_proveedor: string
   fecha_recepcion_donacion: string
@@ -27,6 +28,8 @@ export type DonationIncomeProduct = Omit<DonationIncomeProductInput, 'id'> & {
 export type DonationIncome = Omit<DonationIncomeInput, 'productos'> & {
   id: string
   donativo_id: string
+  numero_entrega: number
+  estado_recepcion: 'PENDIENTE_ACTA' | 'DOCUMENTADA' | 'FINALIZADA'
   created_by: string
   created_at: string
   updated_by: string | null
